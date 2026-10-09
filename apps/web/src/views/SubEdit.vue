@@ -82,18 +82,24 @@
                             <label class="text-xs text-slate-500">订阅地址（一行一个，可填多个）</label>
                             <NodeContentEditor
                                 v-model="form.url"
-                                class="mt-1.5 h-40"
+                                class="mt-1.5 h-40 resize-y"
                                 placeholder="https://example.com/api/v1/client/subscribe?token=xxx"
                             />
                             <label class="text-xs text-slate-500 block mt-3">下载 UA（可选）</label>
                             <input v-model="form.ua" class="input mt-1.5 font-mono !text-xs" placeholder="例如 clash-verge/v2.0" />
                         </div>
 
+                        <!-- 节点内容是这一页的主要输入物：几十上百行 URI / YAML 是常态，
+                             高度给到 h-96（384px，约 15 行），比原先的 h-52（8 行）翻倍。
+                             resize-y 让右下角可以拖 —— CodeMirror 的外壳是普通块级元素，
+                             加 resize 就能像 textarea 一样拉伸（外壳的 overflow 非 visible，
+                             满足浏览器显示手柄的前提）；拖出来的高度是 inline style，
+                             优先级高于 Tailwind 的 h-96，所以拖完不会被类名顶回去。 -->
                         <div v-else class="mt-3">
                             <label class="text-xs text-slate-500">节点内容（URI 列表或 Clash YAML）</label>
                             <NodeContentEditor
                                 v-model="form.content"
-                                class="mt-1.5 h-52"
+                                class="mt-1.5 h-96 resize-y"
                                 placeholder="ss://... 或&#10;proxies:&#10;  - name: xxx"
                             />
                         </div>

@@ -42,7 +42,10 @@
                  差了近 700px，页面右下角像是被啃掉一块。
                  预览卡片因此要 flex-col，让节点列表 flex-1 吃掉多出来的高度，
                  列表超出时自己滚（不再把卡片撑高）。 -->
-            <div class="grid lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)] gap-4 mt-6 items-stretch grow basis-0 min-h-[680px]">
+            <div
+                class="grid lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)] gap-4 mt-6 items-stretch grow basis-0 min-h-[680px]"
+                :style="gridMinH != null ? { minHeight: `${gridMinH}px` } : undefined"
+            >
                 <!-- 预览 -->
                 <div class="card p-6 fade-up lg:col-span-1 flex flex-col min-h-0">
                     <div class="flex items-center gap-3 flex-wrap shrink-0">
@@ -73,8 +76,15 @@
                      overflow-auto）才滚得起来。3:1 的分法是按内容定的：
                      节点内容编辑器吃大头，JSON 卡片保持它原本约 190px 的观感。 -->
                 <div class="lg:col-span-2 flex flex-col gap-4 min-h-0">
-                    <!-- 基本信息 -->
-                    <div class="card p-5 fade-up flex-[3] min-h-0 flex flex-col" style="--d:100ms">
+                    <!-- 基本信息：默认 flex-[3] 与 JSON 卡按 3:1 分高度；
+                         手动拉伸节点内容后改为 flex-none（高度=内容）：
+                         向上拖编辑器缩小时 JSON 卡吃剩余，向下拖时网格被顶高、
+                         JSON 卡高度不变整体下移，两种情况底边都保持对齐。 -->
+                    <div
+                        class="card p-5 fade-up min-h-0 flex flex-col"
+                        :class="contentEdH == null ? 'flex-[3]' : 'lg:flex-none'"
+                        style="--d:100ms"
+                    >
                         <div class="text-sm font-semibold mb-3 shrink-0">基本信息</div>
                         <div class="grid md:grid-cols-2 gap-3 shrink-0">
                             <div>
@@ -119,23 +129,53 @@
                         </div>
 
                         <!-- 节点内容是这一页的主要输入物：几十上百行 URI / YAML 是常态。
-                             高度交给布局：lg 以上 flex-1 自适应，跟着窗口高度伸缩
-                             （1928×940 下约 312px，1400 高的窗口能到 700px+），
-                             这样整页才能锁在一屏内、默认打开就全部可见。
-                             lg 以下页面本来就是堆叠滚动的，保持固定 h-96（384px，约 15 行）。
+                             高度默认交给布局（lg:flex-1 随窗口伸缩，整页锁定一屏、
+                             两列底边对齐）。右下角拉伸手柄常驻，跟老版 resize 一样
+                             自由拉伸：编辑器变高多少，网格就顶高多少，JSON 卡高度
+                             不变、整体下移，底边仍对齐，页面变长可滚；向上拖编辑器
+                             自己缩小（下限 140），JSON 卡吃掉多出的空间。
+                             「↺ 自适应」一键还原。
 
-                             ⚠️ lg 以上不再挂 resize-y：高度由 flex 决定时，
-                             拖拽写进去的 inline height 会被 flex-basis:0 直接忽略，
-                             留个拖不动的把手比没有更糟。小屏仍可拖。
-                             外壳 .code-editor 的 overflow 非 visible，
-                             满足浏览器画 resize 手柄的前提。 -->
-                        <div v-else class="mt-3 flex-1 min-h-0 flex flex-col">
-                            <label class="text-xs text-slate-500 shrink-0">节点内容（URI 列表或 Clash YAML）</label>
+                             ⚠️ 为什么不用原生 resize-y：高度由 flex 决定时
+                             （flex-basis:0），拖拽写进去的 inline height 会被直接
+                             无视 —— 把手看得见却拖不动，比没有更糟。所以这里
+                             自绘手柄、用 JS 把拖动换算成显式高度。
+                             小屏（lg 以下）页面本来就是堆叠滚动，保留原生 resize-y
+                             与固定 h-96（384px，约 15 行）。 -->
+                        <div
+                            v-else
+                            ref="contentEdWrap"
+                            class="mt-3 flex-1 min-h-0 flex flex-col relative"
+                            :class="contentEdH == null ? '' : 'lg:flex-none'"
+                        >
+                            <!-- h-6 固定行高：「↺ 自适应」按钮手动模式才出现，
+                                 若行高随内容走，按钮出现会把编辑器往下顶 10px，
+                                 拖动换算就差 10（JSON 卡多移 10、底边错位 10） -->
+                            <div class="flex items-center shrink-0 h-6">
+                                <label class="text-xs text-slate-500">节点内容（URI 列表或 Clash YAML）</label>
+                                <button
+                                    v-if="contentEdH != null"
+                                    class="btn-ghost !py-0.5 !px-1.5 text-[10px] ml-auto"
+                                    title="恢复跟随窗口的自适应高度"
+                                    @click="resetEdHeight"
+                                >↺ 自适应</button>
+                            </div>
                             <NodeContentEditor
                                 v-model="form.content"
-                                class="mt-1.5 h-96 resize-y lg:flex-1 lg:min-h-[140px] lg:resize-none"
+                                class="mt-1.5 h-96"
+                                :class="contentEdH == null ? 'lg:flex-1 lg:min-h-[140px]' : 'lg:flex-none'"
+                                :style="contentEdH != null ? { height: `${contentEdH}px` } : undefined"
                                 placeholder="ss://... 或&#10;proxies:&#10;  - name: xxx"
                             />
+                            <!-- 拉伸手柄：盖在编辑器右下角，纵向拖动 -->
+                            <div
+                                data-ed-grip
+                                class="hidden lg:flex absolute bottom-0 right-0 w-4 h-4 z-10 cursor-ns-resize items-center justify-center opacity-40 hover:opacity-100 transition-opacity"
+                                title="拖动调整高度（下方 JSON 卡随之下移，底边保持对齐）"
+                                @mousedown.prevent="startEdResize"
+                            >
+                                <span class="block w-3 h-1 rounded-full bg-slate-400"></span>
+                            </div>
                         </div>
                     </div>
 
@@ -209,6 +249,61 @@ const form = reactive({
 });
 
 const preview = reactive({ loading: false, error: '', nodes: [], log: [], total: null, format: '' });
+
+// ---- 节点内容编辑器的手动高度 ----
+// contentEdH = null → 跟随布局自适应（flex-1），整页锁定一屏、底边对齐；
+// 数字 → 用户拖出来的固定高度（px）。跟老版 resize 一样自由拉伸：
+// 编辑器变高多少，网格最小高度就顶高多少 —— JSON 卡高度不变、
+// 整体往下移，两列底边仍然对齐（对齐在变长后的网格底边上），
+// 页面变长出现滚动。向上拖则编辑器自己缩小（下限 140），网格
+// 最小不低于原来的一屏高度，此时 JSON 卡吃掉多出的空间。
+// gridMinH 就是那个网格最小高度（null = 不干预）。
+const contentEdH = ref(null);
+const gridMinH = ref(null);
+// 一屏基线：首次拖动时记下网格当时的（一屏）高度。之后每次拖动都
+// 以它为基准换算网格最小高度 —— 不能用「当前网格高度」当基准，
+// 否则向上拖回时 max() 会卡在上一次顶高的高度上回不来。
+const gridBaseH = ref(null);
+const contentEdWrap = ref(null);
+
+const EDITOR_MIN = 140;
+const EDITOR_MAX = 3000;
+
+function startEdResize(e) {
+    const wrap = contentEdWrap.value;
+    const ed = wrap?.querySelector('.code-editor');
+    if (!ed) return;
+    // 起点全部量一次，拖动过程中只做算术（布局在变，不能边拖边量）
+    const edH0 = ed.getBoundingClientRect().height;
+    if (gridBaseH.value == null) {
+        const grid = document.querySelector('main .grid');
+        gridBaseH.value = grid ? Math.round(grid.getBoundingClientRect().height) : 0;
+    }
+    const base = gridBaseH.value;
+    const startY = e.clientY;
+
+    const move = (ev) => {
+        const h = Math.round(Math.min(EDITOR_MAX, Math.max(EDITOR_MIN, edH0 + ev.clientY - startY)));
+        contentEdH.value = h;
+        // 编辑器长多少网格顶高多少（不低于一屏基线）；向上缩时网格
+        // 回到一屏、JSON 卡随之变高，底边始终对齐
+        gridMinH.value = Math.round(Math.max(base, base + (h - edH0)));
+    };
+    const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        document.body.style.userSelect = '';
+    };
+    document.body.style.userSelect = 'none'; // 拖动时别把编辑器里的文本一起选中
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+}
+
+function resetEdHeight() {
+    contentEdH.value = null;
+    gridMinH.value = null;
+    gridBaseH.value = null;
+}
 
 const renamed = computed(() => !isNew.value && form.name !== originalName.value);
 const nameWarn = computed(() => renamed.value);

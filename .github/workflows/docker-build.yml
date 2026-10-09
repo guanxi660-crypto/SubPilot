@@ -1,0 +1,114 @@
+# Docker 镜像构建流水线。
+#
+# 每个 push / 手动触发都会：
+#   1. 用仓库里的 Dockerfile（两段构建：vite build → 纯运行时）构建镜像；
+#   2. 起容器做冒烟测试：探 /healthz（鉴权之前的存活路由，应返回 200）；
+#   3. 推到 GHCR（ghcr.io/<owner>/subpilot）。
+#
+# 镜像 tag 规则（metadata-action）：
+#   - dev / main 分支 push  →  branch-<名>
+#   - main 分支             →  latest
+#   - tag v1.2.3            →  1.2.3
+#   - 所有构建              →  sha-<短哈希>
+#
+# 构建缓存走 actions 缓存（type=gha）：Dockerfile 的依赖层按 manifest
+# 命中，日常改动源码时 npm ci 基本不重跑，构建通常只要几十秒。
+
+name: docker-build
+
+on:
+  push:
+    branches: [main, dev]
+    tags: ["v*"]
+    paths:
+      - "apps/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".github/workflows/docker-build.yml"
+      - "package.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# 同分支只留最新一次运行，省 Actions 时长
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # GHCR 镜像名必须全小写；repository_owner（guanxi660-crypto）本身就是小写，
+  # 仓库名 SubPilot 带大写所以不用 ${{ github.repository }}。
+  IMAGE: ghcr.io/${{ github.repository_owner }}/subpilot
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # ---- 构建（只进本地 docker，不推）—— 冒烟测试用 ----
+      - name: Build image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: subpilot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- 冒烟测试：起容器，探 /healthz 到 200 为止 ----
+      - name: Smoke test (/healthz)
+        run: |
+          docker run -d --name smoke \
+            -e SUBPILOT_TOKEN=ci-smoke-token \
+            -e DB_FILE=/tmp/smoke.db \
+            -p 127.0.0.1:8795:8795 \
+            subpilot:ci
+          code=000
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8795/healthz || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          echo "/healthz → HTTP $code"
+          echo "---- 容器日志 ----"
+          docker logs smoke | tail -30 || true
+          docker stop smoke >/dev/null
+          if [ "$code" != "200" ]; then
+            echo "::error::冒烟测试失败：容器 30s 内 /healthz 未返回 200"
+            exit 1
+          fi
+
+      # ---- 推送 GHCR（push / 手动触发；PR 不推）----
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-
+
+      - name: Push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

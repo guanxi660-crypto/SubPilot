@@ -101,6 +101,7 @@ subpilot/
 │  ├─ verify-ui-converted.mjs     20 项转换页界面回归（预览链接隐藏 / 多选分发链接不消失 / 成品卡固定链接 / 无控制台错误）
 │  ├─ verify-ui.mjs        108 项界面交互验证（地址栏同步、跳转、分享面板、参数折叠、配置选择、TG 推送与目标胶囊、AI 提案三按钮与预览弹窗、成品保存、反浏览器自动填充）
 │  │                       设置页不再展示访问令牌（由 Worker secret 固定，登录页负责输入）
+│  ├─ verify-subedit-layout.mjs   12 项订阅编辑页布局回归（节点内容 h-96 与可拉伸 / 两列底边对齐 / 滚动到底不被底部悬浮条压住）
 │  ├─ verify-storage.mjs   22 项存储层回归（行级写入量 / 纯重排不重写正文 / 统计行级 UPSERT / 重启持久化）
 │  ├─ verify-presets.mjs   远程配置预设与 SubPilot-Archive 的一致性比对
 │  └─ shots.mjs            逐页截图（14 张：10 张页面 + 概览三主题 + 订阅页玻璃主题）+ 控制台错误检查
@@ -145,6 +146,7 @@ node scripts/verify-ui-converted.mjs  # 转换页界面回归（20 项，自带�
 node scripts/verify-regions.mjs       # 地区识别回归（56 项，纯函数不需起服务）
 node scripts/verify-operators.mjs     # 算子回归（11 项，纯函数不需起服务）
 node scripts/verify-storage.mjs       # 存储层回归（22 项，直接开临时库，不需起服务）
+node scripts/verify-subedit-layout.mjs  # 订阅编辑页布局回归（12 项，自带播种与清理）
 node scripts/verify-presets.mjs       # 模板预设与 SubPilot-Archive 一致性
 node scripts/shots.mjs                # 逐页截图到 shots/，并检查控制台错误
 node scripts/verify-ui.mjs            # 108 项界面交互验证（需先跑 shots 播种数据）
@@ -157,6 +159,7 @@ node scripts/verify-ui.mjs            # 108 项界面交互验证（需先跑 sh
 - `verify.mjs`：写假 AI 密钥、写假 TG token、轮换分发密钥
 - `verify-converted-share.mjs`：建临时成品 + 临时分享码 + 临时 TG 目标（收尾全部还原）
 - `verify-adhoc-link.mjs`：建两条临时订阅（各带不同算子链，收尾删除）
+- `verify-subedit-layout.mjs`：建一条临时订阅（15 个节点 + 5 个算子，收尾删除）
 - `verify-ui-converted.mjs`：建临时成品 + 临时分享码 + 两条临时远程订阅（收尾全部删除）
 - `shots.mjs`：清空全部订阅 / 组合 / 文件 / 成品 / 分享码，再播种演示数据
 - `verify-ui.mjs`：生成分享码（收尾时会自己删掉）

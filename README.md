@@ -85,13 +85,13 @@ subpilot/
 │     ├─ stores/           auth / theme / operators
 │     └─ utils/            name（名称校验）、configPresets（SubPilot-Archive 同款模板预设）、inputs（反浏览器自动填充声明）
 ├─ scripts/
-│  ├─ verify.mjs           79 项后端端到端验证（检测到真实数据时自动降为 64 项，见下）
+│  ├─ verify.mjs           后端端到端验证（干净环境下全跑；检测到真实数据时自动跳过写入类断言，见下）
 │  ├─ verify-operators.mjs 11 项算子回归（Region Pin 置顶不改名 / 多地区优先级 / 沉底 / 与 Sort 组合）
 │  ├─ verify-regions.mjs   56 项地区识别回归（真实节点名用例 / 53 个地区与旗帜 / 短国家码整词边界不误判）
 │  ├─ verify-converted-share.mjs  30 项成品分享回归（固定链接不变 / 原样吐出 / 403 边界 / 码归一与回收 / TG 目标落库）
 │  ├─ verify-adhoc-link.mjs       18 项多来源分发回归（sp:// 解析 / adhoc 链接 / 每条订阅的算子生效 / 密钥校验）
-│  ├─ verify-ui-converted.mjs     21 项转换页界面回归（预览链接隐藏 / 多选分发链接不消失 / 成品卡固定链接 / 无控制台错误）
-│  ├─ verify-ui.mjs        101 项界面交互验证（地址栏同步、跳转、分享面板、参数折叠、配置选择、TG 推送与目标胶囊、AI 提案三按钮与预览弹窗、成品保存、反浏览器自动填充）
+│  ├─ verify-ui-converted.mjs     17 项转换页界面回归（预览链接隐藏 / 多选分发链接不消失 / 成品卡固定链接 / 无控制台错误）
+│  ├─ verify-ui.mjs        108 项界面交互验证（地址栏同步、跳转、分享面板、参数折叠、配置选择、TG 推送与目标胶囊、AI 提案三按钮与预览弹窗、成品保存、反浏览器自动填充）
 │  │                       设置页不再展示访问令牌（由 Worker secret 固定，登录页负责输入）
 │  ├─ verify-presets.mjs   远程配置预设与 SubPilot-Archive 的一致性比对
 │  └─ shots.mjs            逐页截图（14 张：10 张页面 + 概览三主题 + 订阅页玻璃主题）+ 控制台错误检查
@@ -115,15 +115,15 @@ npm run dev:web         # 前端 dev server → http://127.0.0.1:5175
 
 ```bash
 npm run dev:server                    # 先起服务
-node scripts/verify.mjs               # 接口验证（干净环境 79 项，有真实数据时 64 项）
+node scripts/verify.mjs               # 接口验证（检测到真实数据时自动跳过写入类断言）
 node scripts/verify-converted-share.mjs  # 成品分享回归（30 项，自带数据清理）
 node scripts/verify-adhoc-link.mjs    # 多来源分发回归（18 项，自带播种与清理）
-node scripts/verify-ui-converted.mjs  # 转换页界面回归（21 项，自带播种与清理）
+node scripts/verify-ui-converted.mjs  # 转换页界面回归（17 项，自带播种与清理）
 node scripts/verify-regions.mjs       # 地区识别回归（56 项，纯函数不需起服务）
 node scripts/verify-operators.mjs     # 算子回归（11 项，纯函数不需起服务）
 node scripts/verify-presets.mjs       # 模板预设与 SubPilot-Archive 一致性
 node scripts/shots.mjs                # 逐页截图到 shots/，并检查控制台错误
-node scripts/verify-ui.mjs            # 101 项界面交互验证（需先跑 shots 播种数据）
+node scripts/verify-ui.mjs            # 108 项界面交互验证（需先跑 shots 播种数据）
 ```
 
 ### 验证脚本的安全边界
@@ -139,7 +139,8 @@ node scripts/verify-ui.mjs            # 101 项界面交互验证（需先跑 sh
 
 所以前两者都带守门，默认**只对演示数据生效**：
 
-- `verify.mjs` 发现非 `__verify__` 前缀的订阅 / 组合 / 文件时，跳过写入类断言（79 → 64 项），
+- `verify.mjs` 发现非 `__verify__` 前缀的订阅 / 组合 / 文件时，跳过写入类断言
+  （设置页密钥遮蔽、分发密钥轮换、TG 配置写入），
   并输出 `~ 检测到 N 项真实数据，跳过写入类断言`。
   原因是 AI key 与 TG token 都只下发掩码，一旦被假值覆盖就再也拿不回来。
 - `shots.mjs` 发现白名单外的条目（含任何分享码）时**直接拒绝执行**并逐条列出，

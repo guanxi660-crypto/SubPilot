@@ -1,5 +1,11 @@
 <template>
-    <div class="p-6 md:p-10 max-w-7xl mx-auto pb-32">
+    <!-- 底部留白必须写成响应式变体（md:pb-32），不能裸写 pb-32：
+         Tailwind 把 md: 变体生成在基础工具类**之后**，所以 md:p-10 的
+         padding-bottom（2.5rem = 40px）会盖掉裸写 pb-32 的 8rem。
+         而底部悬浮保存条高 63px —— 于是滚动到底时卡片底边距视口底只有 40px，
+         被压住 23px（实测：卡片底边 837 / 悬浮条上沿 814）。
+         同一条媒体查询里 pb 排在 p 之后，md:pb-32 才能生效。 -->
+    <div class="p-6 md:p-10 max-w-7xl mx-auto pb-24 md:pb-32">
         <div class="flex items-center gap-3">
             <button class="btn-ghost !py-1.5 text-xs" @click="back">‹ 返回</button>
             <h1 class="text-2xl font-bold">

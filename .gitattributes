@@ -1,0 +1,48 @@
+# 换行符统一：仓库内存 LF，检出时按下面的规则。
+#
+# Windows 上 git 默认 core.autocrlf=true，会把文本文件检出成 CRLF，
+# 于是每次 clone 都出现「整文件被改动」的假 diff，shell 脚本到 CI/WSL 里
+# 还会因为 \r 报 `bad interpreter`。这里显式锁死，谁 clone 都一样。
+* text=auto eol=lf
+
+# 二进制：一律不做换行转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.zip  binary
+*.gz   binary
+*.pdf  binary
+
+# 文本：明确 LF
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.ts    text eol=lf
+*.vue   text eol=lf
+*.json  text eol=lf
+*.jsonc text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.svg   text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+*.toml  text eol=lf
+
+# Windows 脚本必须 CRLF，否则老版本 cmd / Windows PowerShell 解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 构建产物与截图不参与 GitHub 语言统计
+apps/web/dist/** linguist-generated=true
+shots/**         linguist-documentation=true

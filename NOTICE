@@ -1,0 +1,126 @@
+SubPilot
+Copyright (C) 2026 SubPilot contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+Third-Party Components and References
+================================================================================
+
+Sub-Store — DSL compatibility only, NO source code is used
+----------------------------------------------------------
+  Upstream:  https://github.com/sub-store-org/Sub-Store
+  License:   GNU Affero General Public License v3.0
+  Authors:   Peng-YM and Sub-Store contributors
+
+  SubPilot does NOT vendor, copy, or derive any source code from Sub-Store.
+  Its server-side source (apps/server/src/) is an independent implementation
+  written from scratch: it has no Sub-Store imports, no shared modules, no
+  ported files, and no build-time path aliases pointing at Sub-Store.
+
+  What it DOES share is a *user-facing convention*: the JSON operator chain
+  uses the same operator type names for a few entries (for example
+  "Flag Operator", "Sort Operator", "Useless Filter") and accepts Sub-Store's
+  inline `(?i)` regex flag syntax. This is interface-level compatibility so
+  that scripts written for Sub-Store's node-processing feature remain
+  recognizable here. Several operator names were also deliberately renamed
+  (e.g. "Regex Rename Operator" -> "Regex Rename"), which further shows this is
+  an independent naming pass rather than a copy.
+
+  The operator type names themselves are short functional labels and are used
+  here under the terms of the AGPL-3.0, with credit to the Sub-Store project.
+
+SubPilot-Archive — the predecessor project (archived, private)
+--------------------------------------------------------------
+  Upstream:  https://github.com/guanxi660-crypto/SubPilot-Archive
+  License:   GNU Affero General Public License v3.0
+
+  SubPilot-Archive is the earlier project by the same author, from which
+  SubPilot inherits its UI conventions and one data file. It is itself a
+  derivative work of Sub-Store (its own NOTICE records that it vendors the
+  Sub-Store backend under apps/server/vendor/sub-store/).
+
+  SubPilot reuses NO server-side code from SubPilot-Archive — the two have
+  entirely different server architectures (SubPilot-Archive vendors Sub-Store
+  and runs it on workerd; SubPilot implements its own
+  storage/processing/distribution layer and delegates all format conversion to
+  an external service).
+
+  One file IS taken verbatim, as recorded in its own header comment:
+
+      apps/web/src/utils/configPresets.js
+          <- SubPilot-Archive: apps/server/src/subconv/presets.js
+
+  The user-interface layout and interaction conventions are also aligned with
+  SubPilot-Archive on purpose (the two are meant to feel like the same product
+  family), but the Vue components are independently written, not copied.
+
+SubConverter-Extended — external service, NO source code
+--------------------------------------------------------
+  Upstream:  https://github.com/Aethersailor/SubConverter-Extended
+  License:   GNU General Public License v3.0
+
+  SubPilot does not include any SubConverter source code. It talks to a
+  SubConverter-Extended instance over HTTP (the `/sub` endpoint) at runtime.
+  That backend is a separate deployment, supplied and operated by the user, and
+  is not part of this distribution.
+
+  The source-modifier syntax used when submitting multiple sources
+  (`tag:name,provider:name,URL`) follows the convention established by the
+  SubPilot-Archive / subweb frontends, for interoperability with the same
+  backend.
+
+Remote config preset data sources
+---------------------------------
+  The preset list in apps/web/src/utils/configPresets.js is a curated set of
+  *URLs* pointing at remote configuration templates maintained by third
+  parties. No template content is bundled — only the links are listed.
+
+      Aethersailor/Custom_OpenClash_Rules   https://github.com/Aethersailor/Custom_OpenClash_Rules
+      cmliu/sub-web-modify                  https://github.com/cmliu/sub-web-modify
+      ACL4SSR/ACL4SSR                       https://github.com/ACL4SSR/ACL4SSR
+      tindy2013/subconverter                https://github.com/tindy2013/subconverter
+      SleepyHeeead/subconverter-config      https://github.com/SleepyHeeead/subconverter-config
+
+  Credit for those templates belongs to their respective maintainers.
+
+vaeann/sub-store-scripts — approach reference only
+--------------------------------------------------
+  Upstream:  https://github.com/vaeann/sub-store-scripts
+
+  The AI assistant's handling of script-header argument documentation was
+  designed with reference to this project. No code is copied.
+
+JavaScript dependencies
+-----------------------
+  Third-party npm packages are used under their own licenses; the authoritative
+  list with versions is in the lockfiles and the three package.json manifests:
+
+      package.json
+      apps/server/package.json
+      apps/web/package.json
+
+  Runtime dependencies of note: `yaml` (ISC), `vue` (MIT), `vue-router` (MIT),
+  `tailwindcss` (MIT), `codemirror` / `@codemirror/*` (MIT), `vite` (MIT),
+  `wrangler` (MIT / Apache-2.0).
+
+================================================================================
+Note on distribution
+================================================================================
+
+SubPilot is licensed as a whole under the GNU Affero General Public License
+v3.0 (or later). If you run a modified version of it as a network service, the
+AGPL requires you to offer the corresponding source code to the users of that
+service.
+
+The full license text is in the LICENSE file at the root of this repository.

@@ -1,0 +1,45 @@
+# 依赖
+node_modules/
+
+# 构建产物（由 `npm run build` 生成，部署时由 Worker 的 assets 绑定上传）
+apps/web/dist/
+
+# wrangler 本地状态（含 dev 环境的 KV 数据，可能带真实订阅/令牌）
+apps/server/.wrangler/
+
+# 临时工作区（logo 换色的方案对比、渲染草稿等）。正式资产在 apps/web/public/，
+# 重新生成走 `python scripts/gen-logo.py <原始.svg>`，本目录可随时删。
+.tmp-logo/
+
+# 临时工作区（目标格式全量探测等一次性排查脚本与产物），可随时删。
+.tmp-formats/
+
+# 排查 SCE 接口时从它源码里导出的 .cpp（属 SubConverter-Extended，GPL-3.0）。
+# 本项目只是通过 HTTP 调用它，**不包含也不发布它的源码** —— 一旦混进仓库，
+# NOTICE 里「外部服务、不含源码」的声明就不成立了。
+_sce_*.cpp
+
+# 运维记录：含真实域名、Cloudflare 账号 / zone id、部署与换域名历史。
+# 本地保留供自查，不随仓库发布。
+DEPLOY.md
+
+# 线上冒烟脚本：BASE 指向作者自己的线上实例，对使用者没有意义。
+scripts/smoke-online.mjs
+
+# 注意：shots/*.png **不忽略** —— 截图是项目展示的一部分（README / 发布用），要入库。
+
+# 凭据 —— 永不入库。访问令牌走 `wrangler secret put`，API Key 走 shell 环境变量。
+.env
+.env.*
+*.pem
+*.key
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*

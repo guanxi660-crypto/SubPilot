@@ -1,0 +1,24 @@
+{
+    // 本地开发配置：KV 走 wrangler 本地模拟，无需真实 namespace id。
+    "name": "subpilot-dev",
+    "main": "src/index.js",
+    "compatibility_date": "2026-01-01",
+    "compatibility_flags": ["nodejs_compat"],
+    "assets": {
+        "directory": "../web/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application"
+    },
+    "kv_namespaces": [
+        {
+            "binding": "DATA",
+            "id": "dev-data"
+        }
+    ],
+    "vars": {
+        // fail-closed 后空令牌会让所有 /api 请求 401，dev 必须给一个值。
+        // 前端登录页填同一个值即可。
+        "SUBPILOT_TOKEN": "dev-local-token",
+        "SUB_BACKEND": "https://subpilot.57995799.xyz"
+    }
+}

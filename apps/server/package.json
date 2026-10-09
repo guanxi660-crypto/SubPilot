@@ -1,0 +1,21 @@
+{
+    "name": "@subpilot/server",
+    "version": "0.1.0",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "scripts": {
+        "dev": "wrangler dev -c wrangler.dev.jsonc --port 8795 --persist-to=.wrangler/state",
+        "deploy": "wrangler deploy -c wrangler.jsonc",
+        "tail": "wrangler tail -c wrangler.jsonc"
+    },
+    "dependencies": {
+        "yaml": "^2.6.1"
+    },
+    "devDependencies": {
+        "wrangler": "^4.147.0"
+    },
+    "optionalDependencies": {
+        "@cloudflare/workerd-windows-64": "^1.20261008.1"
+    }
+}

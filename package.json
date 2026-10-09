@@ -1,0 +1,18 @@
+{
+    "name": "subpilot",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "SubPilot —— 面向 SubConverter-Extended 的订阅管理控制台（订阅 / JSON 脚本处理 / 组合 / 文件分享 / AI 助手 / 同步），单 Cloudflare Worker 部署",
+    "license": "AGPL-3.0-only",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "install:all": "cd apps/server && npm install && cd ../web && npm install",
+        "dev:server": "cd apps/server && npm run dev",
+        "dev:web": "cd apps/web && npm run dev",
+        "build": "cd apps/web && npm run build",
+        "deploy": "npm run build && cd apps/server && npm run deploy"
+    }
+}

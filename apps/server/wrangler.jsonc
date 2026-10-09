@@ -1,0 +1,41 @@
+{
+    // SubPilot —— 单 Worker 部署：后端 API + 前端静态资源同处一个 Worker。
+    //
+    // 与 SubPilot-Archive 的差别：本项目的转换层**不在本地实现**，而是转发给
+    // SubConverter-Extended（`SUB_BACKEND`）。Worker 只负责：
+    //   ① 存储（订阅 / 组合 / 文件 / 分享码 / 设置）
+    //   ② 节点解析 + JSON 算子链处理（筛选 / 排序 / 重命名 …）
+    //   ③ 把处理结果交给 SCE 转换，再把响应代理回来
+    //   ④ AI 助手 SSE 代理、Gist / WebDAV 同步
+    "name": "subpilot",
+    "main": "src/index.js",
+    "compatibility_date": "2026-01-01",
+    "compatibility_flags": ["nodejs_compat"],
+
+    // 前端静态资源（vite build 产物）。部署前先跑 npm run build。
+    "assets": {
+        "directory": "../web/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application"
+    },
+
+    // 数据存储。部署前先创建 namespace，把下面的 id 换成真实值：
+    //   npx wrangler kv namespace create DATA -c apps/server/wrangler.jsonc
+    "kv_namespaces": [
+        {
+            "binding": "DATA",
+            "id": "403748f66fe342fd8a2d4b22498a7700"
+        }
+    ],
+
+    // 访问令牌走 secret（wrangler secret put SUBPILOT_TOKEN），不写进本文件也不进 git。
+    // 未配置时 fail-closed：所有受保护路由一律 401。
+    //
+    // 其余配置项（SCE 后端地址、AI 接口、同步目标）都存在 KV 里，登录后在「设置」页改。
+    "vars": {
+        "SUB_BACKEND": "https://subpilot.57995799.xyz"
+    }
+
+    // 可选：定时同步（Gist / WebDAV）
+    // "triggers": { "crons": ["0 */6 * * *"] }
+}

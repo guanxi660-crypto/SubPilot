@@ -1,0 +1,646 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    color-scheme: dark;
+    --accent: #7c6cff;
+    --accent2: #4cc9f0;
+    /* accent 色走 rgb 三元组（Tailwind 以 <alpha-value> 引用，支持 /15 等透明度修饰）。
+       hex 版本供少数写死 var(--accent) 的旧样式（sortable-ghost、OperatorEditor）使用，
+       两套必须同步覆盖，见 html.light。 */
+    --accent-rgb: 124 108 255;
+    --accent2-rgb: 76 201 240;
+    /* 暗色主题色板（Tailwind base/panel/panel2/line 引用） */
+    --c-base: 11 11 18;
+    --c-panel: 18 18 28;
+    --c-panel2: 24 24 38;
+    --c-line: 35 35 58;
+    /* 代码编辑器配色（CodeMirror，见 components/NodeContentEditor.vue）。
+       组件内部样式由 EditorView.theme 注入，颜色一律引用这组变量 ——
+       变量在绘制时求值，所以切主题不必重建编辑器实例。
+       gutter 底色跟着 --c-panel 走，glass 主题覆盖了 --c-panel 就自动跟随。 */
+    --cm-text: #cbd5e1;
+    --cm-caret: rgb(var(--accent-rgb));
+    --cm-selection: rgb(var(--accent-rgb) / 0.3);
+    --cm-gutter-bg: rgb(var(--c-panel) / 0.75);
+    --cm-gutter-fg: #7d879b;
+    --cm-gutter-border: rgb(var(--c-line) / 0.7);
+    --cm-placeholder: #64748b;
+}
+
+/* 亮色主题：html.light 切换
+   设计取向（比默认更沉、更暖、对比更强）：
+   - 背景压暗到 229,224,214 且降低黄度（R-B 从 +12 收到 +15 内并整体下调），
+     原来的暖米色亮得发黄、和浅色文字抢对比度
+   - 面板 251,249,245：接近纯白但带暖调，和压暗后的底色拉开更明显的层次
+   - accent 也随主题换色（此前只换灰阶，紫/亮青沿用暗色原值）：
+       · 紫压到 #584ad6（暖浅底上 5.2:1，原 #7c6cff 只有 3.2:1）
+       · 亮青压到 #0369a1 —— **与「远程 / 本地」sky 徽标的覆盖值完全一致**，
+         从此 accent2 链接、徽标、按钮蓝是同一个蓝，不再各唱各的调
+   - 文字灰阶见下方，全部 ≥4.5:1（WCAG AA 正文） */
+html.light {
+    color-scheme: light;
+    --c-base: 229 224 214;
+    --c-panel: 251 249 245;
+    --c-panel2: 240 235 226;
+    --c-line: 206 197 184;
+    --accent: #584ad6;
+    --accent2: #0369a1;
+    --accent-rgb: 88 74 214;
+    --accent2-rgb: 3 105 161;
+    /* 亮色下的编辑器：正文压深到 #334155（原 #cbd5e1 在暖底上几乎看不见），
+       gutter 用极淡的 slate 底 + 中性描边，别用 --c-panel（暖白，会和面板糊在一起） */
+    --cm-text: #334155;
+    --cm-selection: rgb(var(--accent-rgb) / 0.18);
+    --cm-gutter-bg: rgba(15, 23, 42, 0.04);
+    --cm-gutter-fg: #94a3b8;
+    --cm-gutter-border: rgba(100, 116, 139, 0.25);
+    --cm-placeholder: #94a3b8;
+}
+
+/* 玻璃拟态主题：html.glass 切换（磨砂卡片 + 彩色光斑背景） */
+html.glass {
+    color-scheme: dark;
+    --c-base: 20 16 40;
+    --c-panel: 30 24 56;
+    --c-panel2: 40 36 70;
+    /* 框中框边框：原 148,140,180 太亮太实，1px 实色压在磨砂背景上
+       又硬又厚（玻璃拟态的边缘本就该是若隐若现的通透感）。
+       降到 108,102,136：仍是浅色描边能看清边界，但不再抢眼。 */
+    --c-line: 108 102 136;
+}
+html.glass body {
+    color: #f1f5f9;
+    background-color: #14102a;
+    background-image:
+        radial-gradient(700px 500px at 10% 0%, rgba(124, 108, 255, 0.4), transparent 60%),
+        radial-gradient(600px 450px at 90% 10%, rgba(76, 201, 240, 0.3), transparent 60%),
+        radial-gradient(800px 600px at 50% 115%, rgba(236, 72, 153, 0.25), transparent 60%);
+    background-attachment: fixed;
+}
+html.glass .card {
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    /* 边框改半透明：玻璃边缘应是通透的、若隐若现的，
+       实色描边在磨砂面上会显出"硬边"，这正是"框中框太厚重"的来源。
+       半透明后描边会随背后光斑颜色变化，更像玻璃。 */
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 20px;
+    /* 立体感靠三层叠出来，单层阴影在深色渐变底上根本立不住：
+         ① 上沿内高光 —— 模拟光从顶部来，玻璃顶边会有一道亮线（inset 顶部亮、
+            底部暗，形成"厚度"错觉，这是让圆角卡片看起来浮起来的关键）
+         ② 贴合阴影 —— 紧贴卡片下方，交代"卡片贴在背景之上"的接触面
+         ③ 扩散阴影 —— 大范围柔和投影，把卡片从同色背景里托出来
+       只留单层 0.18 的话，在 body 的三色 radial 渐变上会糊平。 */
+    box-shadow:
+        /* 上沿高光 + 下沿内暗，塑造边缘厚度 */
+        inset 0 1px 0 rgba(255, 255, 255, 0.18),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+        /* 接触面：小而实，贴着卡片 */
+        0 2px 6px rgba(0, 0, 0, 0.28),
+        /* 扩散面：大而柔，托出层次 */
+        0 12px 32px rgba(0, 0, 0, 0.3);
+}
+html.glass aside {
+    background: rgba(255, 255, 255, 0.06);
+    /* 侧栏与内容区分隔线减淡 + 加过渡，切换主题时不生硬 */
+    border-color: rgba(255, 255, 255, 0.08);
+    transition: border-color 0.25s ease, background-color 0.25s ease;
+}
+/* 框中框的分割线（表格行、内层容器等继承 border-line 的地方）统一减淡。
+   这些 1px 实线叠在卡片上就是"厚重"的另一半来源 ——
+   卡片边框已经半透明，内部线若仍是实色，视觉上会形成明显硬格。 */
+html.glass .border-line {
+    border-color: rgba(255, 255, 255, 0.08);
+}
+html.glass .card,
+html.glass .input,
+html.glass .btn-ghost {
+    /* 边框颜色与透明度平滑过渡，避免 hover / 切换时突跳。
+       保留 card-hover 的抬升动画：transition 用逗号列表补上 transform，
+       否则会覆盖掉 .card-hover 的 transition-all 导致卡片不再上浮。 */
+    transition:
+        border-color 0.2s ease,
+        background-color 0.2s ease,
+        box-shadow 0.25s ease,
+        backdrop-filter 0.25s ease,
+        transform 0.3s ease;
+}
+/* 悬停时边框轻微提亮，保持通透感的同时给出反馈 */
+html.glass .card-hover:hover {
+    border-color: rgba(124, 108, 255, 0.35);
+    /* 悬停抬起时投影跟着变深变散，同时上沿高光提亮——
+       高光加强 + 投影加大 = 卡片明显"离开"桌面 */
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.26),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+        0 4px 10px rgba(0, 0, 0, 0.32),
+        0 18px 44px rgba(0, 0, 0, 0.38);
+}
+html.glass .input {
+    background: rgba(255, 255, 255, 0.08);
+    /* 输入框描边同步减淡，与卡片保持同一档通透感 */
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #f8fafc;
+}
+html.glass .input:focus {
+    border-color: rgba(124, 108, 255, 0.7);
+}
+html.glass .btn-ghost {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+}
+html.glass .text-slate-200,
+html.glass .hover\:text-slate-200:hover {
+    color: #f1f5f9;
+}
+html.glass .text-slate-300,
+html.glass .hover\:text-slate-300:hover {
+    color: #e2e8f0;
+}
+html.glass .text-slate-400,
+html.glass .hover\:text-slate-400:hover {
+    color: #cbd5e1;
+}
+html.glass .text-slate-500 {
+    color: #a8b3c5;
+}
+html.glass .text-slate-600 {
+    color: #8b96ab;
+}
+
+/* 深色主题文字提亮（原灰阶在近黑底 rgb(11,11,18) 上偏闷）：
+   原 600 #64748b 只有 4.12:1、500 #94a3b8 7.65:1，整屏发灰。
+   这里把整条灰阶往上抬，尤其把 400/500/600 提得更多，
+   让正文与辅助文字更白亮通透。
+   实测对比度（底色 rgb(11,11,18)）：
+     200 #f8fafc 18.74:1 · 300 #eef2f7 17.44:1 · 400 #dbe3ee 15.16:1
+     500 #c2cddc 12.20:1 · 600 #a9b6c9 9.55:1 */
+/* 深色主题默认正文色。这里必须写 color 而不能用 @apply text-slate-200 ——
+   后文已有 html.dark .text-slate-200 规则，@apply 会与之形成循环依赖，
+   postcss 直接报 "creates a circular dependency" 导致构建失败。 */
+html.dark body {
+    color: #f8fafc;
+}
+html.dark .text-slate-100 {
+    color: #ffffff;
+}
+html.dark .text-slate-200,
+html.dark .hover\:text-slate-200:hover {
+    color: #f8fafc;
+}
+html.dark .text-slate-300,
+html.dark .hover\:text-slate-300:hover {
+    color: #eef2f7;
+}
+html.dark .text-slate-400,
+html.dark .hover\:text-slate-400:hover {
+    color: #dbe3ee;
+}
+html.dark .text-slate-500,
+html.dark .hover\:text-slate-500:hover {
+    color: #c2cddc;
+}
+html.dark .text-slate-600,
+html.dark .hover\:text-slate-600:hover {
+    color: #a9b6c9;
+}
+
+/* 亮色下的文字灰阶整体压深（原 UI 按 dark 调校）。
+   本轮再下压一档，全部 ≥4.5:1（WCAG AA 正文），实测值：
+   100 #0b1220 15.5:1 · 200 #1e293b 12.1:1 · 300 #334155 8.6:1
+   400 #475569 6.3:1 · 500 #4b5563 6.3:1 · 600 #5b6472 4.9:1
+   （原 600 是 #94a3b8，只有 2.36:1，暖底上几乎看不清） */
+html.light body {
+    @apply text-slate-800;
+}
+html.light .text-slate-100 {
+    color: #0b1220;
+}
+html.light .text-slate-200,
+html.light .hover\:text-slate-200:hover {
+    color: #1e293b;
+}
+html.light .text-slate-300,
+html.light .hover\:text-slate-300:hover {
+    color: #334155;
+}
+html.light .text-slate-400,
+html.light .hover\:text-slate-400:hover {
+    color: #475569;
+}
+html.light .text-slate-500,
+html.light .hover\:text-slate-500:hover {
+    color: #4b5563;
+}
+html.light .text-slate-600,
+html.light .hover\:text-slate-600:hover {
+    color: #5b6472;
+}
+/* 选中态：accent/15 浅紫底 + 白字 → 亮色下压深。
+   用 var(--accent) 与边框（border-accent/60）同源，选中态整组同色 */
+html.light .bg-accent\/15.text-white {
+    color: var(--accent);
+}
+html.light .hover\:text-white:hover {
+    color: var(--accent);
+}
+html.light .\!text-white {
+    color: var(--accent) !important;
+}
+html.light .card {
+    /* 暖底上原来的中性阴影太弱（0.06/0.08 透明度在浅色背景几乎不可见，
+       卡片会显得"贴"在纸上而不是浮在上面）。
+       加深为「接触面+扩散面」双层，并补上沿高光，与 glass 主题同一套逻辑。 */
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.9),
+        0 2px 6px rgba(70, 55, 35, 0.12),
+        0 10px 28px rgba(70, 55, 35, 0.14);
+    border-color: rgba(206, 197, 184, 0.85);
+}
+/* 协议徽标（type-*）：亮色下逐个给准确色值。
+   原来统一用 filter: brightness(0.72) saturate(1.5) 整体压暗，
+   但那会连同下面新设的准确色值一起二次压暗，两者打架。
+   实测这些 300 段文字色在各自 500/10 淡底上只有 1.15~1.56:1，
+   改为 800/900 段后全部 ≥6:1： */
+html.light .type-ss,
+html.light .type-ssr {
+    color: #075985;
+}
+html.light .type-vmess,
+html.light .type-vless {
+    color: #5b21b6;
+}
+html.light .type-trojan {
+    color: #9f1239;
+}
+html.light .type-hysteria2,
+html.light .type-hysteria {
+    color: #9a3412;
+}
+html.light .type-tuic {
+    color: #115e59;
+}
+html.light .type-wireguard {
+    color: #3f6212;
+}
+html.light .type-default {
+    color: #475569;
+}
+
+/* ---- 亮色主题语义色加深 ----
+   问题：说明文字用 text-emerald-400/80、删除按钮用 text-rose-300/80，
+   这些 /80 透明度在浅色暖底上把颜色洗得极淡 ——
+   实测 emerald-400/80 渲染成 #59d7a7 只有 1.47:1，
+   rose-300/80 渲染成 #fcb5bd 只有 1.59:1，远低于小字号正文 4.5:1。
+   截图里绿色说明发淡、删除字像粉灰色，就是这个原因。
+
+   这里直接覆盖渲染后的最终色值（含原本的 alpha 混合结果），
+   不去动各组件的 Tailwind 类 —— 一处覆盖全局所有同类元素。
+   深色主题不受影响：这些选择器只在 html.light 下生效。 */
+html.light .text-emerald-400\/80,
+html.light .text-emerald-400\/70,
+html.light .text-emerald-300\/80,
+html.light .text-emerald-300\/90 {
+    /* 目标 ≥4.5:1（原 1.47:1）。
+       /90 这个变体同样必须显式列出 —— 「探活成功（5296 ms）」「已保存」这类
+       反馈文字用的就是它，漏掉的话在亮色下仍以 #6ee7b7 渲染，只有 1.4:1。
+       和 amber-300/90 是同一类漏网（见下方注释）。 */
+    color: #0f7355 !important;
+}
+html.light .text-rose-300\/80,
+html.light .text-rose-400\/80,
+html.light .text-rose-400\/70 {
+    /* 目标 ≥4.5:1（原 1.59:1），取 #b3261e 达 6.16:1 */
+    color: #b3261e !important;
+}
+/* 删除按钮用的是 !text-rose-300/80 —— Tailwind 为 important 修饰生成的
+   类名是 .\!text-rose-300\/80（斜杠要转义成 \/，但 ! 在类名里不需转义，
+   写成 \! 会被 postcss 判为 Unexpected '/'）。 */
+html.light .\!text-rose-300\/80,
+html.light .\!text-rose-300\/70,
+html.light .\!text-rose-400\/80 {
+    color: #b3261e !important;
+}
+/* 无透明度的语义色也一并压深，避免同类元素漏网。
+   下面这组必须把 Tailwind 实际生成的每个类都列全（已逐一核对产物）：
+   emerald-300 / emerald-400 / rose-300/70 / rose-300 / rose-400。 */
+html.light .text-emerald-300 {
+    color: #0f7355;
+}
+html.light .text-emerald-400 {
+    color: #0f7355;
+}
+html.light .text-rose-300\/70 {
+    color: #b3261e !important;
+}
+html.light .text-rose-300,
+html.light .text-rose-400 {
+    color: #b3261e;
+}
+/* 危险按钮底色也要能看出是危险操作（原来 rose-500 在浅底上偏浅） */
+html.light .btn-danger,
+html.light .text-rose-500 {
+    color: #a81f18;
+}
+/* 琥珀色提示（分享弹窗「永久有效」、转换页「预览链接含管理令牌」等）压深到 ≥4.5:1。
+   覆盖必须把带透明度的变体**逐个列全**：amber-300/90 在十个页面里都在用，
+   漏一个（如 /90）它就会以原始亮黄 #fcd34d 渲染在浅底上 —— 只有 1.4:1，
+   用户反馈「还是太亮、不够明显」正是这个漏网。 */
+html.light .text-amber-400\/80,
+html.light .text-amber-400\/90,
+html.light .text-amber-300,
+html.light .text-amber-300\/90,
+html.light .text-amber-300\/80,
+html.light .text-amber-300\/70 {
+    color: #8a5200 !important;
+}
+html.light .text-amber-400 {
+    color: #8a5200;
+}
+
+/* ---- 亮色主题蓝色系 ----
+   「远程」徽标是 border-sky-500/40 + text-sky-300（Subs.vue / Files.vue）。
+   sky-300 #7dd3fc 落在自己的 sky-500/10 淡蓝底上只有 1.42:1 ——
+   和之前的 emerald/rose 一样是浅底上的浅色。
+   改用 sky-800/900 段：#0369a1 得 5.05:1，#075985 得 6.43:1。 */
+html.light .text-sky-300,
+html.light .text-sky-400 {
+    color: #0369a1;
+}
+html.light .text-sky-300\/80,
+html.light .text-sky-400\/80,
+html.light .text-sky-500\/80 {
+    color: #0369a1 !important;
+}
+html.light .text-sky-500 {
+    color: #075985;
+}
+/* 协议徽标的 type-ss/type-ssr 同样用 sky-300 */
+html.light .type-ss,
+html.light .type-ssr {
+    color: #0369a1;
+}
+/* 本地徽标 emerald-300 在 emerald-500/10 底上只有 1.31:1，
+   上面 .text-emerald-300 已压到 #0f7355（5.13:1），此处无需重复。 */
+
+/* ---- 代码编辑器外壳（CodeMirror，见 components/NodeContentEditor.vue）----
+   只负责外壳的底色 / 描边 / 聚焦态，内部配色走 --cm-* 变量（定义见上方各主题块）。
+   此前这里只有 html.light 的几条 .cm-* 规则，而项目里根本没有 CodeMirror —— 是死代码；
+   现在按三套主题补齐。 */
+.code-editor {
+    @apply rounded-xl border border-line overflow-hidden transition;
+    background: rgb(var(--c-panel2));
+}
+.code-editor:focus-within {
+    border-color: rgb(var(--accent-rgb) / 0.6);
+    box-shadow: 0 0 0 2px rgb(var(--accent-rgb) / 0.2);
+}
+/* glass 主题下 .input 是半透明白，编辑器外壳跟随，否则会在磨砂卡面上抠出一块实色 */
+html.glass .code-editor {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+html,
+body,
+#app {
+    height: 100%;
+}
+
+body {
+    @apply bg-base text-slate-200 font-sans antialiased;
+    background-image:
+        radial-gradient(600px 400px at 8% -10%, rgba(124, 108, 255, 0.12), transparent 60%),
+        radial-gradient(500px 350px at 100% 0%, rgba(76, 201, 240, 0.08), transparent 60%),
+        radial-gradient(700px 500px at 50% 120%, rgba(124, 108, 255, 0.06), transparent 60%);
+    background-attachment: fixed;
+}
+
+/* 亮色下光斑改暖色（琥珀 + 玫瑰），与暖米底呼应；
+   原透明度（0.13/0.10/0.08）叠在压暗的底色上仍是肉眼可见的一大片黄，
+   用户反馈「整体太黄」—— 再压一半，只留一层若有若无的暖调。 */
+html.light body {
+    background-image:
+        radial-gradient(620px 420px at 6% -12%, rgba(217, 164, 76, 0.07), transparent 62%),
+        radial-gradient(520px 360px at 102% -2%, rgba(200, 120, 96, 0.05), transparent 62%),
+        radial-gradient(760px 520px at 52% 122%, rgba(168, 132, 88, 0.04), transparent 62%);
+}
+
+::selection {
+    background: rgba(124, 108, 255, 0.35);
+}
+
+/* 渐变品牌字 */
+.brand-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-accent to-accent2;
+}
+
+/* 品牌 logo 图标。
+   图形本身由 /logo.svg 提供（品牌渐变底 #7c6cff→#4cc9f0 + 白色云朵/飞机），
+   这里只负责尺寸、圆角与投影 —— 之前用 ◈ 字形 + 渐变底，
+   字形在不同系统字体下宽高不一致、且无法作为 favicon 复用。 */
+.logo-mark {
+    @apply inline-block w-9 h-9 rounded-xl flex-none select-none;
+    box-shadow: 0 8px 24px rgba(124, 108, 255, 0.35);
+}
+
+/* 卡片 */
+.card {
+    @apply bg-panel/80 border border-line rounded-2xl backdrop-blur;
+}
+/* .card-hover 同特异性(0,1,0) 且写在 .card 之后 —— 若在这里把 box-shadow
+   重置成 0 0 0，会把 .card 刚加的立体阴影整个清掉（这正是卡片"变平"的
+   隐藏原因之一）。因此这里**不再重置** box-shadow，只让 .card 的阴影继承下来；
+   hover 抬升时再叠加更大的投影。 */
+.card-hover {
+    @apply transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/40;
+}
+.card-hover:hover {
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.55),
+        0 4px 12px rgba(0, 0, 0, 0.16),
+        0 20px 46px rgba(0, 0, 0, 0.22),
+        0 0 0 1px rgba(124, 108, 255, 0.08);
+}
+
+/* 入场动画（配合 --d 变量做 stagger） */
+@keyframes fadeUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+.fade-up {
+    animation: fadeUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: var(--d, 0ms);
+}
+
+/* 路由切换过渡 */
+.page-enter-active,
+.page-leave-active {
+    transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.page-enter-from {
+    opacity: 0;
+    transform: translateY(8px);
+}
+.page-leave-to {
+    opacity: 0;
+    transform: translateY(-4px);
+}
+
+/* 拖放排序（vuedraggable / SortableJS）视觉反馈 */
+.drag-handle {
+    /* 抓手：用 braille 盲文点字符，比 ⋮⋮ 更居中且不占额外宽度 */
+    font-size: 14px;
+    line-height: 1;
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.sortable-ghost {
+    /* 占位：原位置留下的空槽 */
+    opacity: 0.4;
+    border-style: dashed !important;
+    border-color: var(--accent) !important;
+}
+.sortable-chosen {
+    /* 选中的卡片 */
+    cursor: grabbing;
+}
+.sortable-drag {
+    /* 跟随鼠标/手指移动的卡片 */
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+    transform: rotate(0.6deg);
+    opacity: 0.95;
+}
+
+/* 骨架屏 */
+@keyframes shimmer {
+    from {
+        background-position: -400px 0;
+    }
+    to {
+        background-position: 400px 0;
+    }
+}
+.skeleton {
+    @apply rounded-xl bg-panel2 relative overflow-hidden;
+}
+.skeleton::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(255, 255, 255, 0.05),
+        transparent
+    );
+    animation: shimmer 1.4s infinite;
+}
+
+/* 打字指示 */
+@keyframes blink {
+    0%,
+    80%,
+    100% {
+        opacity: 0.25;
+    }
+    40% {
+        opacity: 1;
+    }
+}
+.typing-dot {
+    @apply inline-block w-1.5 h-1.5 rounded-full bg-accent2 mx-0.5;
+    animation: blink 1.2s infinite;
+}
+.typing-dot:nth-child(2) {
+    animation-delay: 0.2s;
+}
+.typing-dot:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+/* 输入控件统一风格 */
+.input {
+    @apply bg-panel2 border border-line rounded-xl px-3 py-2 text-sm outline-none
+        focus:border-accent/60 focus:ring-2 focus:ring-accent/20 transition
+        placeholder:text-slate-500 w-full;
+}
+
+.btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm
+        font-medium transition active:scale-[.98] disabled:opacity-40
+        disabled:pointer-events-none select-none;
+}
+
+.btn-primary {
+    @apply btn text-white;
+    /* 渐变走主题变量：亮色下两端都是深色（紫 #584ad6 → 深蓝 #0369a1），
+       白字对比 ≥6:1；原来硬编码到亮青 #4cc9f0，白字只有 2.2:1 */
+    background: linear-gradient(135deg, rgb(var(--accent-rgb)) 0%, rgb(var(--accent2-rgb)) 130%);
+    box-shadow: 0 6px 20px rgba(124, 108, 255, 0.25);
+}
+.btn-primary:hover {
+    filter: brightness(1.12);
+    box-shadow: 0 8px 26px rgba(124, 108, 255, 0.38);
+}
+
+.btn-ghost {
+    @apply btn bg-panel2 border border-line hover:border-accent/50 text-slate-300;
+}
+
+.btn-danger {
+    @apply btn bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20;
+}
+
+/* 协议徽标 */
+.type-badge {
+    @apply inline-block text-[10px] leading-none px-1.5 py-1 rounded-md font-mono uppercase tracking-wide border;
+}
+.type-ss,
+.type-ssr {
+    @apply border-sky-500/40 text-sky-300 bg-sky-500/10;
+}
+.type-vmess,
+.type-vless {
+    @apply border-violet-500/40 text-violet-300 bg-violet-500/10;
+}
+.type-trojan {
+    @apply border-rose-500/40 text-rose-300 bg-rose-500/10;
+}
+.type-hysteria2,
+.type-hysteria {
+    @apply border-orange-500/40 text-orange-300 bg-orange-500/10;
+}
+.type-tuic {
+    @apply border-teal-500/40 text-teal-300 bg-teal-500/10;
+}
+.type-wireguard {
+    @apply border-lime-500/40 text-lime-300 bg-lime-500/10;
+}
+.type-default {
+    @apply border-line text-slate-400 bg-panel2;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-thumb {
+    @apply bg-line rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(124, 108, 255, 0.4);
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}

@@ -1,20 +1,57 @@
-// KV 快照存储。
+// 快照存储。
 //
-// 为什么用「单键快照」而不是每个订阅一个键：
-//   数据模型天然是几个数组，一次读一次写最省事，也不会出现「订阅写成功、
-//   组合没写成功」的中间态。单用户面板的数据量（几百 KB 上限）对 KV 完全够用。
+// 数据模型是「几个数组 + 一份设置」，对外只暴露 loadSnapshot / mutate /
+// saveSnapshot 三个操作。**底层驱动是可替换的**：
 //
-// ⚠️ KV 是最终一致的（跨 colo 传播最长约 60s）。应对办法不是加锁，而是：
-//   所有**写操作直接返回更新后的完整快照**，前端用返回值覆盖本地状态。
-//   这样「自己刚写完立刻读」永远不会读到旧值。只有换设备/换 colo 才可能短暂看到旧数据。
+//   · Cloudflare Workers：只有 KV，用下面的 kvDriver —— 整个 snapshot 存一个
+//     key，读一次写一次。
+//   · Node / Docker：入口注入 env.STORE（SQLite 实现，见 apps/server/node/
+//     sqlite-store.mjs）。语义完全相同，但能做到**行级写入** —— 改一条订阅
+//     不再把整个数据集重写一遍。
 //
-// 后续若要强一致，只需把 loadSnapshot/saveSnapshot 换成 Durable Object 实现，
-// 上层的 mutate() 接口不用动。
+// 驱动契约（4 个方法，都是 async）：
+//   readSnapshot()      → 快照对象 | null
+//   writeSnapshot(snap) → 持久化
+//   readStats()         → { items } | null
+//   writeStats(stats)   → 持久化
+//
+// ⚠️ 所有写操作依然直接返回更新后的完整快照（见下），前端用返回值覆盖本地
+// 状态。这条约定与驱动无关，换存储时不要动。
+//
+// 为什么要「单键快照」而不是一开始就分表：数据量天然很小（单用户面板），
+// 一次读一次写最省事，也不会出现「订阅写成功、组合没写成功」的中间态。
+// 分表是 Node 侧为了写入性能才做的优化，见 sqlite-store.mjs 里的说明。
+//
+// 后续若要强一致，只需把驱动换成 Durable Object 实现，上层接口不用动。
 
 import { isPlainObject, nowIso } from './util.js';
 
 const SNAPSHOT_KEY = 'panel:snapshot:v1';
 const STATS_KEY = 'panel:stats:v1';
+
+/** KV 驱动：整个快照一个 key。Workers 上唯一可用的方案。 */
+function kvDriver(DATA) {
+    return {
+        async readSnapshot() {
+            return await DATA.get(SNAPSHOT_KEY, 'json');
+        },
+        async writeSnapshot(snap) {
+            await DATA.put(SNAPSHOT_KEY, JSON.stringify(snap));
+        },
+        async readStats() {
+            return await DATA.get(STATS_KEY, 'json');
+        },
+        async writeStats(stats) {
+            await DATA.put(STATS_KEY, JSON.stringify(stats));
+        },
+    };
+}
+
+/** 取驱动：Node 入口注入的 STORE 优先，否则回落到 KV。 */
+function driverOf(env) {
+    return env.STORE || kvDriver(env.DATA);
+}
+
 
 export function defaultSettings() {
     return {
@@ -68,7 +105,7 @@ export function defaultSnapshot() {
 /** 读取快照；缺失/损坏时回落到默认值，不抛异常（面板必须能起来） */
 export async function loadSnapshot(env) {
     try {
-        const raw = await env.DATA.get(SNAPSHOT_KEY, 'json');
+        const raw = await driverOf(env).readSnapshot();
         if (!isPlainObject(raw)) return defaultSnapshot();
         return normalizeSnapshot(raw);
     } catch {
@@ -78,7 +115,7 @@ export async function loadSnapshot(env) {
 
 export async function saveSnapshot(env, snap) {
     snap.updatedAt = nowIso();
-    await env.DATA.put(SNAPSHOT_KEY, JSON.stringify(snap));
+    await driverOf(env).writeSnapshot(snap);
     return snap;
 }
 
@@ -122,7 +159,7 @@ function normalizeSnapshot(raw) {
 
 export async function loadStats(env) {
     try {
-        const raw = await env.DATA.get(STATS_KEY, 'json');
+        const raw = await driverOf(env).readStats();
         if (!isPlainObject(raw) || !isPlainObject(raw.items)) return { items: {} };
         return raw;
     } catch {
@@ -137,6 +174,9 @@ export async function loadStats(env) {
  * 跨 colo 的并发无法根治（那需要 Durable Object），但**同一个 isolate 内**串行化
  * 就能挡掉绝大部分丢计数：一次请求里连着记几次、或自动推送连着触发，
  * 都跑在同一条 Promise 链上。
+ *
+ * Node / Docker 下 SQLite 驱动虽然能做到单行 UPSERT，但这里仍然保留这条链：
+ * 一是行为与 Workers 一致，二是「先读后写」的读-改-写模式本来就需要串行。
  */
 let statsChain = Promise.resolve();
 
@@ -152,7 +192,7 @@ export async function recordPull(env, { type, item, ip }) {
         cur.count += 1;
         cur.last = nowIso();
         stats.items[key] = cur;
-        await env.DATA.put(STATS_KEY, JSON.stringify(stats));
+        await driverOf(env).writeStats(stats);
         return cur;
     };
     // 前一步失败也要继续排下一步，否则一次失败会把整条链永久卡死
@@ -162,5 +202,5 @@ export async function recordPull(env, { type, item, ip }) {
 }
 
 export async function clearStats(env) {
-    await env.DATA.put(STATS_KEY, JSON.stringify({ items: {} }));
+    await driverOf(env).writeStats({ items: {} });
 }

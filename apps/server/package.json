@@ -7,7 +7,8 @@
     "scripts": {
         "dev": "wrangler dev -c wrangler.dev.jsonc --port 8795 --persist-to=.wrangler/state",
         "deploy": "wrangler deploy -c wrangler.jsonc",
-        "tail": "wrangler tail -c wrangler.jsonc"
+        "tail": "wrangler tail -c wrangler.jsonc",
+        "start": "node --disable-warning=ExperimentalWarning node/server.mjs"
     },
     "dependencies": {
         "yaml": "^2.6.1"

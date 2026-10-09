@@ -7,6 +7,9 @@
 //
 // 用法：node scripts/verify-ui-converted.mjs
 // 前置：npm run dev:server（8795）+ npm run build（产物由 Worker 的 ASSETS 提供）
+//
+// 自带播种与清理：建一条成品 + 两条远程订阅，收尾全部删除。
+// 订阅是必需的 —— 「多选时分发链接不消失」这条断言要求页面上至少有两个来源可选。
 
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,7 +22,10 @@ const chromium = pwMod.chromium || pwMod.default?.chromium;
 const root = join(process.env.LOCALAPPDATA || '', 'ms-playwright');
 const exe = join(root, readdirSync(root).find((d) => d.startsWith('chromium-')), 'chrome-win', 'chrome.exe');
 
-const BASE = process.env.SPX_BASE || 'http://127.0.0.1:8795';
+// 与其它回归脚本保持一致：位置参数优先，其次环境变量。
+// SUBPILOT_BASE 是正式名；SPX_BASE 是改名前的遗留名，保留兼容不删。
+const BASE =
+    process.argv[2] || process.env.SUBPILOT_BASE || process.env.SPX_BASE || 'http://127.0.0.1:8795';
 const TOKEN = process.env.SPX_TOKEN || 'dev-local-token';
 const NAME = '_ui_check_conv';
 
@@ -38,7 +44,24 @@ const ok = (n, c, extra = '') => {
 const H = { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` };
 const api = (p, o = {}) => fetch(`${BASE}${p}`, { ...o, headers: { ...H, ...(o.headers || {}) } });
 
-// ---- 播种：一条成品（后端会自动给它建固定分享码）----
+console.log(`\n== 转换页界面回归 @ ${BASE} ==\n`);
+
+// ---- 播种 ----
+// 一条成品（后端会自动给它建固定分享码）+ 两条**远程**订阅。
+//
+// 订阅是为了让下面的多选断言总能执行：它原先依赖「库里恰好有 ≥2 条远程订阅」，
+// 干净环境上会整段跳过 —— 而「多选时分发链接消失」恰恰是本脚本要守的最容易回归的一条。
+// 名字用 `__verify__` 风格的前缀，且收尾会删掉。
+const SUB_A = '_ui_check_conv_a';
+const SUB_B = '_ui_check_conv_b';
+for (const name of [SUB_A, SUB_B]) {
+    const r = await api('/api/subs', {
+        method: 'POST',
+        body: JSON.stringify({ name, source: 'remote', url: `https://example.com/${name}.txt` }),
+    });
+    ok(`播种远程订阅 ${name}`, r.status === 201 || r.status === 200, `HTTP ${r.status}`);
+}
+
 await api('/api/converted', {
     method: 'POST',
     body: JSON.stringify({
@@ -60,8 +83,6 @@ page.on('console', (m) => {
     if (m.type() === 'error') errors.push(`${m.text().split('\n')[0]} @ ${m.location?.()?.url || ''}`);
 });
 
-console.log(`\n== 转换页界面回归 @ ${BASE} ==\n`);
-
 // 本站是 hash 路由：/converter 会被 SPA 回退到首页，必须写 /#/converter
 await page.goto(`${BASE}/#/converter`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(1000);
@@ -80,8 +101,10 @@ async function pick(name) {
     await page.locator('button', { hasText: name }).first().click();
     await page.waitForTimeout(900);
 }
+// 播种时已建好这两条；仍回读一次，播种失败时走下面的 else 分支，
+// 而不是拿不到名字就去点按钮、报出一堆误导性的失败。
 const subNames = ((await (await api('/api/subs')).json()).data || [])
-    .filter((s) => s.source === 'remote')
+    .filter((s) => s.source === 'remote' && (s.name === SUB_A || s.name === SUB_B))
     .map((s) => s.name);
 if (subNames.length >= 2) {
     await pick(subNames[0]);
@@ -121,12 +144,22 @@ if (await card.count()) {
     ok('复制的是 /share/converted 完整链接', /\/share\/converted\/.+\?code=.+/.test(clip), clip.slice(0, 60) + '…');
 }
 
-// ---- 收尾：删成品（后端连带回收它的分享码）----
+// ---- 收尾：删成品（后端连带回收它的分享码）+ 删播种的订阅 ----
 await browser.close();
 await api(`/api/converted/${encodeURIComponent(NAME)}`, { method: 'DELETE' });
+for (const name of [SUB_A, SUB_B]) {
+    await api(`/api/sub/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
 const left = await (await api('/api/shares')).json();
 const stray = (left.data || []).filter((s) => s.name === NAME);
 ok('收尾：成品与分享码已清理', stray.length === 0, stray.length ? JSON.stringify(stray) : '已清空');
+
+const subsLeft = await (await api('/api/subs')).json();
+ok(
+    '收尾：播种的订阅已清理',
+    !(subsLeft.data || []).some((s) => s.name === SUB_A || s.name === SUB_B)
+);
 
 ok('无控制台错误', errors.length === 0, errors.slice(0, 3).join(' || '));
 

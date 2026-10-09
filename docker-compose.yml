@@ -1,0 +1,68 @@
+# SubPilot —— 单容器部署。
+#
+#   cp .env.example .env      # 填 SUBPILOT_TOKEN
+#   docker compose up -d --build
+#
+# 数据全在宿主机的 ./data 目录（挂到容器的 /data），删容器不丢数据；
+# 备份就是打包这个目录 —— 里面是 SQLite 的 subpilot.db（含 -wal / -shm）。
+# 想让「只拷 subpilot.db 一个文件」就是完整备份，先 `docker compose stop`，
+# 进程退出时会做一次 WAL checkpoint。
+
+services:
+  subpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: subpilot:latest
+    container_name: subpilot
+    restart: unless-stopped
+
+    # 以 tini 作 PID 1：把 SIGTERM 正确转给 node，Ctrl+C / docker stop 才会走
+    # 优雅关闭（落 WAL、关库），而不是被直接 SIGKILL 掉。
+    init: true
+    # 优雅关闭的宽限期。进程要等长连接（AI 助手的 SSE）断开，默认 10s 偶尔不够。
+    stop_grace_period: 15s
+
+    ports:
+      # 左边是宿主机端口。若要放到 nginx / Caddy 后面，可改成 "127.0.0.1:8795:8795"
+      # 只监听回环，避免绕过反代直接暴露。
+      - "8795:8795"
+
+    environment:
+      # 访问令牌。**不设置时所有受保护接口一律 401**（fail-closed，见 src/index.js）。
+      # 用 .env 注入，不要写进本文件、更不要提交。
+      SUBPILOT_TOKEN: ${SUBPILOT_TOKEN:?请在 .env 或环境变量里设置 SUBPILOT_TOKEN}
+      # 转换后端（SubConverter-Extended）。留空则需登录后在「转换」页配置。
+      SUB_BACKEND: ${SUB_BACKEND:-https://subpilot.57995799.xyz}
+      TZ: ${TZ:-Asia/Shanghai}
+      # SQLite 文件位置。放在卷里才会持久化；想换目录（比如挂 NFS）改这里。
+      DB_FILE: ${DB_FILE:-/data/subpilot.db}
+
+    volumes:
+      # 所有业务数据都在这一个目录里（SQLite，见 apps/server/node/sqlite-store.mjs）。
+      #
+      # ⚠️ 权限：容器以非 root 的 node 用户（uid 1000）运行，而 compose 自动创建的
+      # 宿主目录属于 root —— 首次启动可能报「unable to open database file」。
+      # 先建好目录并放开权限：
+      #     mkdir -p data && sudo chown -R 1000:1000 data
+      # 或者改用具名卷（Docker 会把镜像里 /data 的属主带过来，不用手动 chown）：
+      #     - subpilot-data:/data      # 顶部另加 volumes: { subpilot-data: }
+      - ./data:/data
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||8795)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+    # 单进程 Node，日志直接进 docker logs，不做轮转配置（交给宿主机的 docker 配置）
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

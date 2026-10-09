@@ -1,0 +1,37 @@
+# 构建上下文瘦身。目标是「镜像里重新装依赖、重新构建前端」，
+# 所以本地产物与依赖一律不进上下文 —— 尤其是 Windows 上装出来的
+# node_modules（含平台相关的原生模块），拷进 Linux 镜像只会坏事。
+#
+# ⚠️ 注意不要排除 package-lock.json：Dockerfile 里用 npm ci，
+# 没有 lock 会直接失败。
+
+# 依赖与构建产物
+**/node_modules
+apps/web/dist
+apps/server/.wrangler
+apps/server/data
+
+# 本地 Node 部署时的数据目录（挂卷用，绝不该进镜像）
+data
+
+# 版本控制 / 编辑器 / 系统
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# 临时工作区与本地日志
+.tmp-*
+.workbuddy-ai
+*.log
+
+# 运行时用不到的东西
+shots
+docs
+scripts
+DEPLOY.md
+README.md
+# LICENSE 与 NOTICE 不排除：镜像里要留许可与第三方声明（AGPL-3.0 的署名要求）

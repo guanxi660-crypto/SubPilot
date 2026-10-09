@@ -7,12 +7,11 @@ apps/web/dist/
 # wrangler 本地状态（含 dev 环境的 KV 数据，可能带真实订阅/令牌）
 apps/server/.wrangler/
 
-# 临时工作区（logo 换色的方案对比、渲染草稿等）。正式资产在 apps/web/public/，
-# 重新生成走 `python scripts/gen-logo.py <原始.svg>`，本目录可随时删。
-.tmp-logo/
-
-# 临时工作区（目标格式全量探测等一次性排查脚本与产物），可随时删。
-.tmp-formats/
+# 临时工作区，可随时删。用通配而不是逐个列目录 —— 漏一个就会把临时文件带进提交。
+#   .tmp-logo/    logo 换色的方案对比（正式资产在 apps/web/public/，
+#                 重新生成走 `python scripts/gen-logo.py <原始.svg>`）
+#   .tmp-formats/ 目标格式全量探测等一次性排查脚本与产物
+.tmp-*/
 
 # 排查 SCE 接口时从它源码里导出的 .cpp（属 SubConverter-Extended，GPL-3.0）。
 # 本项目只是通过 HTTP 调用它，**不包含也不发布它的源码** —— 一旦混进仓库，
@@ -31,8 +30,14 @@ scripts/smoke-online.mjs
 # 凭据 —— 永不入库。访问令牌走 `wrangler secret put`，API Key 走 shell 环境变量。
 .env
 .env.*
+# 但模板要入库，否则使用者不知道要填哪些变量
+!.env.example
 *.pem
 *.key
+
+# Node / Docker 部署的本地数据（SQLite）。生产数据在这里，别提交。
+apps/server/data/
+/data/
 
 # 编辑器 / 系统
 .vscode/

@@ -13,6 +13,10 @@
         "dev:server": "cd apps/server && npm run dev",
         "dev:web": "cd apps/web && npm run dev",
         "build": "cd apps/web && npm run build",
-        "deploy": "npm run build && cd apps/server && npm run deploy"
+        "deploy": "npm run build && cd apps/server && npm run deploy",
+        "start": "cd apps/server && npm run start",
+        "docker:build": "docker build -t subpilot .",
+        "docker:up": "docker compose up -d --build",
+        "docker:down": "docker compose down"
     }
 }

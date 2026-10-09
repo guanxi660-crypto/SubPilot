@@ -7,7 +7,12 @@
     //   ② 节点解析 + JSON 算子链处理（筛选 / 排序 / 重命名 …）
     //   ③ 把处理结果交给 SCE 转换，再把响应代理回来
     //   ④ AI 助手 SSE 代理、Gist / WebDAV 同步
-    "name": "subpilot",
+    // ⚠️ 名字必须与线上现役 Worker 一致。
+    // 线上是 `subpilot-x`，自定义域 subpilot.ynotu.top 绑在它上面；
+    // 改成别的名字，`wrangler deploy` 会**新建**一个 Worker，
+    // 而域名仍指向旧的那个 —— 表现就是「部署成功但线上没变」。
+    // 要换名字得先解绑域名再改绑，别只改这一行。
+    "name": "subpilot-x",
     "main": "src/index.js",
     "compatibility_date": "2026-01-01",
     "compatibility_flags": ["nodejs_compat"],

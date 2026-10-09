@@ -1,11 +1,17 @@
-// 订阅编辑页布局回归：底部留白、两列底边对齐、节点内容编辑器可拉伸。
+// 订阅编辑页布局回归：整页锁定一屏、两列底边对齐、矮窗口优雅回退为页面滚动。
 //
-// 守的是一个很隐蔽的坑：
-//   容器写的是 `p-6 md:p-10 ... pb-32`，但 Tailwind 把 `md:` 变体生成在基础工具类
-//   **之后**，所以 `md:p-10` 的 padding-bottom（2.5rem = 40px）盖掉了裸写 `pb-32` 的
-//   8rem。底部悬浮保存条高 63px —— 滚动到底时卡片底边距视口底只剩 40px，
-//   **被压住 23px**，JSON 卡片的算子列表看不全。
-//   修法是把留白也写成响应式变体（`md:pb-32`），同一条媒体查询里 pb 排在 p 之后。
+// 守的设计（2026-10 重构）：
+//   编辑订阅是表单页，默认打开就该整页可见 —— 此前页面比视口高 149px，
+//   两列底部各有 84px 落在折叠线以下、被底部悬浮条盖住，要滚一下才看得到。
+//   现在容器 min-h-full + flex-col，网格 grow basis-0 吃掉剩余高度；
+//   节点内容编辑器 lg:flex-1 跟着窗口高度伸缩；预览列表与 JSON 卡内部自己滚。
+//
+//   两个隐蔽的坑，改动时别踩：
+//   1. flex-basis: 0%（flex-1 的写法）在**容器高度不定**（min-h-full）时按规范
+//      退化为 content —— CodeMirror 的内容高度会把整页撑到 2000px+，一切自适应
+//      全作废。必须用定长 basis（basis-0 = 0px）。
+//   2. 网格的隐式 auto 行按内容的 max-content 撑高，min-h-0 切不断（那只是允许
+//      收缩，行高照样按内容算）。必须显式 lg:grid-rows-[minmax(0,1fr)]。
 //
 // 用法：node scripts/verify-subedit-layout.mjs
 // 前置：npm run dev:server（8795）+ npm run build
@@ -26,9 +32,7 @@ const BASE =
     process.argv[2] || process.env.SUBPILOT_BASE || process.env.SPX_BASE || 'http://127.0.0.1:8795';
 const TOKEN = process.env.SPX_TOKEN || 'dev-local-token';
 const NAME = '_ui_check_layout';
-
-// 用用户的视口尺寸：太高的视口内容放得下、根本不滚动，就测不出这个 bug
-const VIEW = { width: 1320, height: 860 };
+const WIDTH = 1320;
 
 let pass = 0;
 let fail = 0;
@@ -47,7 +51,7 @@ const api = (p, o = {}) => fetch(`${BASE}${p}`, { ...o, headers: { ...H, ...(o.h
 
 console.log(`\n== 订阅编辑页布局回归 @ ${BASE} ==\n`);
 
-// ---- 播种：本地订阅，内容与算子都给足，保证右列高到需要滚动 ----
+// ---- 播种：本地订阅，内容与算子都给足（内容多到 CodeMirror 天然想撑高页面）----
 const NODES = Array.from(
     { length: 15 },
     (_, i) =>
@@ -70,27 +74,33 @@ const PROCESS = [
 }
 
 const browser = await chromium.launch({ executablePath: exe });
-const ctx = await browser.newContext({ viewport: VIEW });
-await ctx.addInitScript((t) => localStorage.setItem('sp_token', t), TOKEN);
-const page = await ctx.newPage();
 const errors = [];
-page.on('pageerror', (e) => errors.push(e.message));
-page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(m.text().split('\n')[0]);
-});
 
-await page.goto(`${BASE}/#/subs/edit/${encodeURIComponent(NAME)}`, { waitUntil: 'networkidle' });
-await page.waitForTimeout(1500);
-
-const probe = () =>
-    page.evaluate(() => {
+// 每档视口独立 context，互不污染
+async function probeAt(height, { scrollToBottom = false } = {}) {
+    const ctx = await browser.newContext({ viewport: { width: WIDTH, height } });
+    await ctx.addInitScript((t) => localStorage.setItem('sp_token', t), TOKEN);
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('console', (m) => {
+        if (m.type() === 'error') errors.push(m.text().split('\n')[0]);
+    });
+    await page.goto(`${BASE}/#/subs/edit/${encodeURIComponent(NAME)}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1500);
+    if (scrollToBottom) {
+        await page.evaluate(() => {
+            const main = document.querySelector('main');
+            main.scrollTop = main.scrollHeight;
+        });
+        await page.waitForTimeout(400);
+    }
+    const m = await page.evaluate(() => {
         const box = (el) => {
             if (!el) return null;
             const b = el.getBoundingClientRect();
             return { top: Math.round(b.top), bottom: Math.round(b.bottom), h: Math.round(b.height) };
         };
-        // 按标题文本定位 —— OperatorEditor 里的算子卡片也是 .card，
-        // 用「最后一个 .card」会拿到算子卡片而不是 JSON 卡片。
+        // OperatorEditor 里的算子卡片也是 .card，按标题文本定位才拿得到目标卡片
         const all = [...document.querySelectorAll('main .card')];
         const pick = (kw) => all.find((c) => (c.innerText || '').trimStart().startsWith(kw));
         const bar = [...document.querySelectorAll('div')].find((d) => {
@@ -99,62 +109,30 @@ const probe = () =>
         });
         const main = document.querySelector('main');
         const ed = document.querySelector('.code-editor');
+        const spill = (el) => (el ? el.scrollHeight - el.clientHeight : 0);
         return {
             viewportH: window.innerHeight,
             canScroll: main.scrollHeight > main.clientHeight,
+            overScroll: main.scrollHeight - main.clientHeight,
             preview: box(pick('实时预览')),
             json: box(pick('JSON 脚本处理')),
+            info: box(pick('基本信息')),
             bar: box(bar),
-            ed: ed
-                ? { ...box(ed), resize: getComputedStyle(ed).resize }
-                : null,
+            ed: ed ? box(ed) : null,
+            spill: { info: spill(pick('基本信息')), json: spill(pick('JSON 脚本处理')), preview: spill(pick('实时预览')) },
         };
     });
+    await ctx.close();
+    return m;
+}
 
-// ---- [1] 节点内容编辑器 ----
+// ---- [1] 正常视口：整页锁定一屏，默认打开全部可见 ----
 {
-    const m = await probe();
+    const m = await probeAt(860);
+    console.log(`    @${WIDTH}x860：编辑器 ${m.ed?.h}px · 基本信息 ${m.info.h}px · JSON 卡 ${m.json.h}px · 悬浮条上沿 ${m.bar.top}`);
     ok('节点内容编辑器已渲染', !!m.ed);
-    ok('高度是 h-96（384px）', m.ed?.h === 384, `${m.ed?.h}px`);
-    ok('computed resize = vertical（右下角可拉伸）', m.ed?.resize === 'vertical', m.ed?.resize);
-
-    // 真拖一次，别只看 CSS 属性
-    const box = await page.locator('.code-editor').first().boundingBox();
-    const hx = box.x + box.width - 5;
-    const hy = box.y + box.height - 5;
-    await page.mouse.move(hx, hy);
-    await page.mouse.down();
-    await page.mouse.move(hx, hy + 100, { steps: 10 });
-    await page.mouse.up();
-    await page.waitForTimeout(300);
-    const after = await page.locator('.code-editor').first().evaluate((el) => Math.round(el.getBoundingClientRect().height));
-    ok('拖右下角真的能改变高度', after > 384 + 40, `384px → ${after}px`);
-}
-
-// ---- [2] 两列底边对齐（items-stretch） ----
-{
-    const m = await probe();
-    ok(
-        '预览卡与 JSON 卡底边对齐',
-        Math.abs(m.preview.bottom - m.json.bottom) <= 1,
-        `预览 ${m.preview.bottom} / JSON ${m.json.bottom}`
-    );
-}
-
-// ---- [3] 核心：滚动到底，内容不能被底部悬浮条压住 ----
-{
-    const before = await probe();
-    ok('页面确实需要滚动（否则测不出这个 bug）', before.canScroll, `内容 ${before.json.bottom} vs 视口 ${before.viewportH}`);
-
-    await page.evaluate(() => {
-        const main = document.querySelector('main');
-        main.scrollTop = main.scrollHeight;
-    });
-    await page.waitForTimeout(400);
-
-    const m = await probe();
-    const gap = m.viewportH - m.json.bottom;
-    console.log(`    滚到底：卡片底边 ${m.json.bottom} · 视口底 ${m.viewportH} · 悬浮条上沿 ${m.bar.top}（高 ${m.bar.h}）`);
+    ok('编辑器高度自适应（不再是写死的 384px）', m.ed && m.ed.h > 0 && m.ed.h < 384, `${m.ed?.h}px`);
+    ok('页面不滚动（整页锁定一屏）', !m.canScroll, `超出 ${m.overScroll}px`);
     ok(
         'JSON 卡底边没被悬浮条压住',
         m.json.bottom <= m.bar.top,
@@ -165,7 +143,46 @@ const probe = () =>
         m.preview.bottom <= m.bar.top,
         m.preview.bottom > m.bar.top ? `被压 ${m.preview.bottom - m.bar.top}px` : `余量 ${m.bar.top - m.preview.bottom}px`
     );
-    ok('底部留白 ≥ 悬浮条高度', gap >= m.bar.h, `留白 ${gap}px vs 悬浮条 ${m.bar.h}px`);
+    ok(
+        '预览卡与 JSON 卡底边对齐（items-stretch）',
+        Math.abs(m.preview.bottom - m.json.bottom) <= 1,
+        `预览 ${m.preview.bottom} / JSON ${m.json.bottom}`
+    );
+    ok(
+        '卡片内容没有溢出自己的盒子',
+        m.spill.info <= 1 && m.spill.json <= 1 && m.spill.preview <= 1,
+        `基本信息 ${m.spill.info} / JSON ${m.spill.json} / 预览 ${m.spill.preview}`
+    );
+}
+
+// ---- [2] 编辑器随视口高度伸缩 ----
+{
+    const tall = await probeAt(1200);
+    ok(
+        '高视口下编辑器跟着变高（不再浪费空间）',
+        tall.ed && tall.ed.h > 380,
+        `860 高 → ${'见上'} · 1200 高 → ${tall.ed?.h}px`
+    );
+    ok('高视口下页面同样不滚动', !tall.canScroll, `超出 ${tall.overScroll}px`);
+}
+
+// ---- [3] 矮窗口：优雅回退为页面滚动，内容不被压扁 ----
+{
+    const short = await probeAt(600);
+    console.log(`    @${WIDTH}x600：页面超出 ${short.overScroll}px · 编辑器 ${short.ed?.h}px`);
+    ok('矮窗口下页面恢复滚动（不硬塞）', short.canScroll, `超出 ${short.overScroll}px`);
+    ok(
+        '矮窗口下卡片内容同样不溢出',
+        short.spill.info <= 1 && short.spill.json <= 1 && short.spill.preview <= 1,
+        `基本信息 ${short.spill.info} / JSON ${short.spill.json} / 预览 ${short.spill.preview}`
+    );
+    // 滚到底验证悬浮条依旧不压内容（回退成页面滚动后，默认位置看不到底部是正常的）
+    const bottom = await probeAt(600, { scrollToBottom: true });
+    ok(
+        '矮窗口滚到底后 JSON 卡底边没被悬浮条压住',
+        bottom.json.bottom <= bottom.bar.top,
+        bottom.json.bottom > bottom.bar.top ? `被压 ${bottom.json.bottom - bottom.bar.top}px` : `余量 ${bottom.bar.top - bottom.json.bottom}px`
+    );
 }
 
 ok('无控制台错误', errors.length === 0, errors.slice(0, 3).join(' || '));

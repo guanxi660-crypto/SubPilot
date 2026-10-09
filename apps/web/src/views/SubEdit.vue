@@ -1,12 +1,18 @@
 <template>
-    <!-- 底部留白必须写成响应式变体（md:pb-32），不能裸写 pb-32：
+    <!-- 整页锁定一屏：min-h-full + flex-col，网格 flex-1 吃掉剩余高度。
+         「编辑订阅」是个表单页，默认打开就该整页可见 —— 之前页面比视口高 149px，
+         两列底部各有 84px 落在折叠线以下，被底部悬浮条盖住，得滚一下才看得到。
+
+         底部留白必须写成响应式变体（md:pb-20），不能裸写 pb-20：
          Tailwind 把 md: 变体生成在基础工具类**之后**，所以 md:p-10 的
-         padding-bottom（2.5rem = 40px）会盖掉裸写 pb-32 的 8rem。
-         而底部悬浮保存条高 63px —— 于是滚动到底时卡片底边距视口底只有 40px，
-         被压住 23px（实测：卡片底边 837 / 悬浮条上沿 814）。
-         同一条媒体查询里 pb 排在 p 之后，md:pb-32 才能生效。 -->
-    <div class="p-6 md:p-10 max-w-7xl mx-auto pb-24 md:pb-32">
-        <div class="flex items-center gap-3">
+         padding-bottom（2.5rem = 40px）会盖掉裸写 pb-20 的 5rem。
+         悬浮保存条高 63px，80px 留白给它 17px 余量；移动端悬浮条抬到
+         bottom-16（离底 64px，占 64..127），所以小屏留 144px（pb-36）。
+
+         min-h-full（而不是 h-full）：窗口太矮、内容确实放不下时，
+         容器还能被内容撑高，页面照常滚动 —— 只是不再有「够高却要滚」的情况。 -->
+    <div class="p-6 md:p-10 max-w-7xl mx-auto pb-36 md:pb-20 min-h-full flex flex-col">
+        <div class="flex items-center gap-3 shrink-0">
             <button class="btn-ghost !py-1.5 text-xs" @click="back">‹ 返回</button>
             <h1 class="text-2xl font-bold">
                 {{ isNew ? '新建订阅' : '编辑订阅' }}
@@ -18,12 +24,25 @@
 
         <template v-else>
             <!-- 左 1 右 2：左边实时预览，右边基本信息 + 脚本处理上下堆叠。
+                 flex-1：网格吃掉标题以下的全部高度，不再按内容自然高度走。
+                 lg:grid-rows-[minmax(0,1fr)]：**关键**。隐式 auto 行的高度 = 内容的
+                 max-content —— CodeMirror 几千字节的节点内容会把行撑到 2000px+，
+                 min-h-0 切不断（那只是允许收缩，行高照样按内容算）。
+                 显式把行定成 minmax(0,1fr) 后行高才真正等于网格高度，
+                 编辑器才肯缩到一屏内。lg 以下堆叠布局保持自然行高。
+                 min-h-[680px]：窗口的下限。再矮就不硬塞了 —— 页面照常滚动，
+                 但卡片内部不会被压扁溢出（基本信息最小 436 + JSON 最小 190 + 间距 16）。
+                 grow basis-0：**必须是定长 basis**。flex-basis: 0%（flex-1 的写法）在
+                 容器高度不定（这里是 min-h-full）时会按规范退化为 content，
+                 CodeMirror 的内容高度就把整页撑到 2000px+，一切自适应全作废；
+                 0px 是定长，不参与百分比解析，才真的从 0 开始分。
                  items-stretch（而非 items-start）：两列拉成等高，右列的底边
                  （JSON 脚本处理）才能和左列（实时预览）对齐 —— 此前 items-start
                  下两列各按内容高度走，预览卡片底边 443、JSON 卡片底边 1117，
                  差了近 700px，页面右下角像是被啃掉一块。
-                 预览卡片因此要 flex-col，让节点列表 flex-1 吃掉多出来的高度。 -->
-            <div class="grid lg:grid-cols-3 gap-4 mt-6 items-stretch">
+                 预览卡片因此要 flex-col，让节点列表 flex-1 吃掉多出来的高度，
+                 列表超出时自己滚（不再把卡片撑高）。 -->
+            <div class="grid lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)] gap-4 mt-6 items-stretch grow basis-0 min-h-[680px]">
                 <!-- 预览 -->
                 <div class="card p-6 fade-up lg:col-span-1 flex flex-col min-h-0">
                     <div class="flex items-center gap-3 flex-wrap shrink-0">
@@ -47,13 +66,17 @@
                     </div>
                 </div>
 
-                <!-- 基本信息 + 脚本处理 -->
+                <!-- 基本信息 + 脚本处理。
+                     min-h-0：切断 CodeMirror 内容高度顺着 min-content 往上撑的链条
+                     （见网格注释）。两张卡都 basis:0 + flex-grow，高度由 flex 算出来
+                     才是「确定高度」，OperatorEditor 的 fill（h-full + 内部
+                     overflow-auto）才滚得起来。3:1 的分法是按内容定的：
+                     节点内容编辑器吃大头，JSON 卡片保持它原本约 190px 的观感。 -->
                 <div class="lg:col-span-2 flex flex-col gap-4 min-h-0">
-                    <!-- 基本信息：留白比原先收一档（p-6→p-5、mt-4→mt-3），
-                         给下面的 JSON 模块腾高度 —— 底边对齐靠的是这一列的总高。 -->
-                    <div class="card p-5 fade-up shrink-0" style="--d:100ms">
-                        <div class="text-sm font-semibold mb-3">基本信息</div>
-                        <div class="grid md:grid-cols-2 gap-3">
+                    <!-- 基本信息 -->
+                    <div class="card p-5 fade-up flex-[3] min-h-0 flex flex-col" style="--d:100ms">
+                        <div class="text-sm font-semibold mb-3 shrink-0">基本信息</div>
+                        <div class="grid md:grid-cols-2 gap-3 shrink-0">
                             <div>
                                 <label class="text-xs text-slate-500">分发名称 <span class="text-rose-300">*</span></label>
                                 <input v-model="form.name" class="input mt-1.5 font-mono" placeholder="例如 my-sub" />
@@ -71,7 +94,7 @@
                             </div>
                         </div>
 
-                        <div class="mt-3">
+                        <div class="mt-3 shrink-0">
                             <label class="text-xs text-slate-500">来源</label>
                             <div class="flex gap-2 mt-1.5">
                                 <button
@@ -84,35 +107,40 @@
                             </div>
                         </div>
 
-                        <div v-if="form.source === 'remote'" class="mt-3">
-                            <label class="text-xs text-slate-500">订阅地址（一行一个，可填多个）</label>
+                        <div v-if="form.source === 'remote'" class="mt-3 flex-1 min-h-0 flex flex-col">
+                            <label class="text-xs text-slate-500 shrink-0">订阅地址（一行一个，可填多个）</label>
                             <NodeContentEditor
                                 v-model="form.url"
-                                class="mt-1.5 h-40 resize-y"
+                                class="mt-1.5 h-40 resize-y lg:flex-1 lg:min-h-[120px] lg:resize-none"
                                 placeholder="https://example.com/api/v1/client/subscribe?token=xxx"
                             />
-                            <label class="text-xs text-slate-500 block mt-3">下载 UA（可选）</label>
-                            <input v-model="form.ua" class="input mt-1.5 font-mono !text-xs" placeholder="例如 clash-verge/v2.0" />
+                            <label class="text-xs text-slate-500 block mt-3 shrink-0">下载 UA（可选）</label>
+                            <input v-model="form.ua" class="input mt-1.5 font-mono !text-xs shrink-0" placeholder="例如 clash-verge/v2.0" />
                         </div>
 
-                        <!-- 节点内容是这一页的主要输入物：几十上百行 URI / YAML 是常态，
-                             高度给到 h-96（384px，约 15 行），比原先的 h-52（8 行）翻倍。
-                             resize-y 让右下角可以拖 —— CodeMirror 的外壳是普通块级元素，
-                             加 resize 就能像 textarea 一样拉伸（外壳的 overflow 非 visible，
-                             满足浏览器显示手柄的前提）；拖出来的高度是 inline style，
-                             优先级高于 Tailwind 的 h-96，所以拖完不会被类名顶回去。 -->
-                        <div v-else class="mt-3">
-                            <label class="text-xs text-slate-500">节点内容（URI 列表或 Clash YAML）</label>
+                        <!-- 节点内容是这一页的主要输入物：几十上百行 URI / YAML 是常态。
+                             高度交给布局：lg 以上 flex-1 自适应，跟着窗口高度伸缩
+                             （1928×940 下约 312px，1400 高的窗口能到 700px+），
+                             这样整页才能锁在一屏内、默认打开就全部可见。
+                             lg 以下页面本来就是堆叠滚动的，保持固定 h-96（384px，约 15 行）。
+
+                             ⚠️ lg 以上不再挂 resize-y：高度由 flex 决定时，
+                             拖拽写进去的 inline height 会被 flex-basis:0 直接忽略，
+                             留个拖不动的把手比没有更糟。小屏仍可拖。
+                             外壳 .code-editor 的 overflow 非 visible，
+                             满足浏览器画 resize 手柄的前提。 -->
+                        <div v-else class="mt-3 flex-1 min-h-0 flex flex-col">
+                            <label class="text-xs text-slate-500 shrink-0">节点内容（URI 列表或 Clash YAML）</label>
                             <NodeContentEditor
                                 v-model="form.content"
-                                class="mt-1.5 h-96 resize-y"
+                                class="mt-1.5 h-96 resize-y lg:flex-1 lg:min-h-[140px] lg:resize-none"
                                 placeholder="ss://... 或&#10;proxies:&#10;  - name: xxx"
                             />
                         </div>
                     </div>
 
-                    <!-- 脚本处理：flex-1 撑满右列剩余高度，底边即与左侧预览卡片对齐 -->
-                    <div class="card p-5 fade-up flex-1 flex flex-col min-h-0" style="--d:150ms">
+                    <!-- 脚本处理：flex-1 与基本信息按 1:3 分高度，底边即与左侧预览卡片对齐 -->
+                    <div class="card p-5 fade-up flex-1 min-h-[190px] flex flex-col" style="--d:150ms">
                         <div class="flex items-center gap-2 flex-wrap shrink-0">
                             <div class="text-sm font-semibold">JSON 脚本处理</div>
                             <span class="text-[11px] text-slate-600">

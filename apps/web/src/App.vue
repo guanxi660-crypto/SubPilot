@@ -39,20 +39,31 @@
                             </router-link>
                         </nav>
 
-                        <div class="px-6 py-5 text-[11px] text-slate-600 flex items-center gap-2">
-                            <span
-                                class="w-1.5 h-1.5 rounded-full inline-block"
-                                :class="backend.online ? 'bg-emerald-400' : 'bg-amber-400'"
-                                :title="backend.online ? '转换后端在线' : '转换后端未知'"
-                            ></span>
-                            <span class="truncate" :title="backendLabel">{{ backendLabel }}</span>
-                            <button
-                                class="ml-auto w-[26px] h-[26px] rounded-lg bg-gradient-to-br from-accent to-accent2 text-white text-xs shadow-md shadow-accent/35 hover:brightness-110 hover:scale-105 active:scale-95 transition flex items-center justify-center shrink-0"
-                                :title="`主题：${THEME_META[themeMode].name} · 点击切换到${THEME_META[nextTheme].name}`"
-                                @click="toggleTheme"
+                        <div class="px-6 py-5 text-[11px] text-slate-600">
+                            <div class="flex items-center gap-2">
+                                <span
+                                    class="w-1.5 h-1.5 rounded-full inline-block"
+                                    :class="backend.online ? 'bg-emerald-400' : 'bg-amber-400'"
+                                    :title="backend.online ? '转换后端在线' : '转换后端未知'"
+                                ></span>
+                                <span class="truncate" :title="backendLabel">{{ backendLabel }}</span>
+                                <button
+                                    class="ml-auto w-[26px] h-[26px] rounded-lg bg-gradient-to-br from-accent to-accent2 text-white text-xs shadow-md shadow-accent/35 hover:brightness-110 hover:scale-105 active:scale-95 transition flex items-center justify-center shrink-0"
+                                    :title="`主题：${THEME_META[themeMode].name} · 点击切换到${THEME_META[nextTheme].name}`"
+                                    @click="toggleTheme"
+                                >
+                                    {{ THEME_META[themeMode].icon }}
+                                </button>
+                            </div>
+                            <!-- 前端构建指纹。SPA 常驻不会自动更新，部署后旧页面依旧能跑，
+                                 于是「改了没生效」十有八九是手上这份是旧的。这行让版本可自查：
+                                 和最新部署的 build 号不一致 → Ctrl+Shift+R 硬刷新。 -->
+                            <div
+                                class="mt-1.5 font-mono text-[10px] text-slate-700 truncate"
+                                :title="`前端构建 ${BUILD_TIME}（${BUILD_ID}）· 与最新部署不一致时请硬刷新`"
                             >
-                                {{ THEME_META[themeMode].icon }}
-                            </button>
+                                build {{ BUILD_ID }}
+                            </div>
                         </div>
                     </aside>
 
@@ -102,7 +113,12 @@
 </template>
 
 <script setup>
+/* global __BUILD_ID__, __BUILD_TIME__ */
 import { computed, onMounted } from 'vue';
+
+// 构建期由 vite.config.js 的 define 注入（编译时常量，不是运行时变量）
+const BUILD_ID = __BUILD_ID__;
+const BUILD_TIME = __BUILD_TIME__;
 
 import {
     THEME_META,

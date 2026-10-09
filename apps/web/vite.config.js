@@ -1,5 +1,26 @@
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
+
+// 构建指纹：注入 __BUILD_ID__ / __BUILD_TIME__，由侧栏底部显示。
+//
+// 为什么需要：SPA 一旦加载就常驻，部署新版本后**不会自己更新** ——
+// 用户会一直看着旧页面，然后以为「改了没生效」。之前排查「编辑订阅页
+// 底部还是老样子」就卡在这里：线上产物明明是最新的，用户浏览器里却是几小时前
+// 加载的那份。有个可见的构建号，一眼就能判断手上是哪一版。
+//
+// 容器里构建时没有 .git（.dockerignore 排除了），execSync 会抛错 —— 兜底为 'nogit'。
+const buildId = (() => {
+    try {
+        return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+            .toString()
+            .trim();
+    } catch {
+        return 'nogit';
+    }
+})();
+// 形如 2026-10-09 23:20（本地时区），配合 hash 用；只精确到分钟足够
+const buildTime = new Date().toLocaleString('sv-SE').slice(0, 16);
 
 // 本地调试：后端由 wrangler dev 跑在 8795（apps/server 下 npm run dev 固定该端口）。
 // 改端口时这里要同步改，否则代理 ECONNREFUSED、所有接口回 503。
@@ -28,6 +49,11 @@ const apiProxy = () => ({
 
 export default defineConfig({
     plugins: [vue()],
+    // 编译期常量：模板里直接用 __BUILD_ID__ / __BUILD_TIME__
+    define: {
+        __BUILD_ID__: JSON.stringify(buildId),
+        __BUILD_TIME__: JSON.stringify(buildTime),
+    },
     server: {
         port: 5175,
         proxy: {

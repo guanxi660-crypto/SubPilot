@@ -28,6 +28,17 @@ DEPLOY.md
 # 线上冒烟脚本：BASE 指向作者自己的线上实例，对使用者没有意义。
 scripts/smoke-online.mjs
 
+# 本地验证 / 截图脚本：只服务于本机开发，不随仓库发布。
+#   · verify*.mjs      接口 / 算子 / 存储 / 安全 等回归脚本
+#   · shots*.mjs       逐页截图（产物 shots/ 是要入库的，脚本本身不必）
+#   · probe-feed.mjs   临时排查用的探测脚本
+# 注意 scripts/package-release.mjs 与 gen-logo.py **不在**排除范围内 ——
+# 前者是发布打包脚本，后者用于重新生成 logo，两者都要留在仓库里。
+scripts/verify*.mjs
+scripts/shots.mjs
+scripts/shot-ai.mjs
+scripts/probe-feed.mjs
+
 # 注意：shots/*.png **不忽略** —— 截图是项目展示的一部分（README / 发布用），要入库。
 
 # 凭据 —— 永不入库。访问令牌走 `wrangler secret put`，API Key 走 shell 环境变量。

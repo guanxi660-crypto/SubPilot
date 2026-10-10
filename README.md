@@ -55,7 +55,7 @@ SCE 是无状态的：只有 `/sub`、`/version`、`/healthz` 等少数路由，
 | 文件 | 规则集 / 模板 / 片段；卡片：编辑 / 下载 / 生成链接 / 分享链接 / TG |
 | 转换 | 8 种目标格式（clash / sing-box / Shadowrocket / VLESS / Hysteria2 / Trojan / SS / SSR），生成分发链接与 feed 地址；多选来源同样有分发链接；成品可保存、下载、固定分享 |
 | AI 助手 | 描述需求生成 JSON 脚本，SSE 流式输出；提案可预览（跑一遍管线看结果）、保存、忽略 |
-| 同步 | Gist / WebDAV 备份恢复（含 SSRF 防护）；Telegram 推送（Bot Token 只存服务端，接口只回掩码） |
+| 同步 | Gist / WebDAV 备份恢复（**仅 WebDAV 目标地址**做基础私网拦截，见「已知限制」）；Telegram 推送（Bot Token 只存服务端，接口只回掩码）。**备份不含设置** —— 导出的是脱敏后的 `settings`（只剩 `hasApiKey` / `tokenSet` 之类的标记），导入也只合并订阅 / 组合 / 文件 / 成品 / 模板五张表，换机后转换后端、公开地址、TG、AI 配置都要重填 |
 | 分发统计 | 记录 `/download/*` 与 `/share/*` 的拉取次数与来源 IP，可导出 CSV |
 
 ## 本地开发
@@ -82,16 +82,26 @@ SUBPILOT_TOKEN=dev-local-token npm start        # → http://127.0.0.1:8795，�
 
 ```bash
 node scripts/verify.mjs                  # 接口验证（检测到真实数据时自动跳过写入类断言）
+node scripts/verify-security.mjs         # 53 项安全回归（常量时间比较 / 明文令牌 / 安全头 / 协议白名单）
 node scripts/verify-regions.mjs          # 56 项地区识别回归（纯函数）
 node scripts/verify-operators.mjs        # 11 项算子回归（纯函数）
-node scripts/verify-storage.mjs          # 22 项存储层回归（直接开临时库）
+node scripts/verify-presets.mjs          # 104 条配置预设与 SubPilot-Archive 逐字一致
+node scripts/verify-storage.mjs          # 25 项存储层回归（直接开临时库，不走 HTTP）
 node scripts/verify-converted-share.mjs  # 30 项成品分享回归
-node scripts/verify-adhoc-link.mjs       # 18 项多来源分发回归
+node scripts/verify-adhoc-link.mjs       # 20 项多来源分发回归
+node scripts/verify-ai.mjs               # 34 项 AI 链路回归（本机起假上游，不烧真 token）
 node scripts/verify-subedit-layout.mjs   # 订阅编辑页布局回归
 node scripts/verify-ui-converted.mjs     # 转换页界面回归
 node scripts/verify-ui.mjs               # 界面交互验证（需先跑 shots 播种）
 node scripts/shots.mjs                   # 逐页截图到 shots/ + 控制台错误检查
+node scripts/shot-ai.mjs                 # 只截 AI 助手页（不清库，供 dev 库里有真实数据时用）
+node scripts/probe-feed.mjs              # 探针：确认「本地处理」路径下 SCE 引用的是本站 feed 地址
+python scripts/gen-logo.py <原始.svg>    # 从原始图标重新生成 logo 资产（apps/web/public/）
 ```
+
+`verify-*` 默认打 `http://127.0.0.1:8795`，令牌取 `SPX_TOKEN` 或 `dev-local-token`，
+所以要**先起服务**；`verify-storage` / `verify-regions` / `verify-operators` / `verify-presets`
+是纯函数或直接开临时库，不需要服务。
 
 `shots.mjs` 会清空服务端资源再播种演示数据，发现白名单外条目时**直接拒绝执行**，
 确认要清空才加 `SHOTS_FORCE=1`。`verify.mjs` 的写入类断言（假 AI key / TG token /
@@ -184,6 +194,26 @@ scripts/              验证与截图脚本
 Dockerfile docker-compose.yml .env.example
 LICENSE (AGPL-3.0-only)  NOTICE
 ```
+
+## 已知限制
+
+以下都是**当前实现的实际行为**，不是待办清单，写出来是为了让部署者心里有数：
+
+| 项 | 现状 | 影响 |
+| --- | --- | --- |
+| 令牌校验无限流 | `/api/*`、`/ai/*`、`/sub` 只有「令牌相等则放行」，没有失败计数 / 锁定 / 退避 | 弱令牌可被爆破；建议把 `SUBPILOT_TOKEN` 用 `openssl rand -hex 24` 生成 |
+| 统计条目无上限 | `记录` 以 `类型\|项目\|IP` 为 key 无限累加，只有手工 `DELETE /api/stats` 才清 | KV 部署下单值逼近 25MiB 上限后会**静默停止**计数（写入失败被 `waitUntil` 吞掉）；需要定期清理 |
+| 订阅正文无体积上限 | 文件限 512KiB、成品限 16MiB，但本地订阅的 `content` 没有限制 | KV 部署下超大订阅会让快照写入失败 |
+| SSRF 校验覆盖面窄 | 只有 WebDAV 目标地址做了私网拦截，且**只判字面 IP**：域名解析结果、302 跳转都不复查 | `/sub?url=`、`/api/preview/*` 取源无防护。**自建部署请勿暴露到公网**，或在外层反代/防火墙限制出网 |
+| 来源 IP 可伪造 | `clientIp()` 信任 `CF-Connecting-IP` → `X-Real-IP` → `X-Forwarded-For` | 自建部署下分发统计的 IP 维度不可信。Cloudflare 部署下这些头由平台覆写，不受影响 |
+| 并发写无乐观锁 | `mutate()` 是「读整份 → 改 → 写回」，没有版本号 | 同一瞬间的两个写操作，后写的覆盖先写的且不报错。单用户面板概率低 |
+| 备份不含设置 | 见上表「同步」行 | 换机恢复后需重填转换后端 / 公开地址 / TG / AI 配置 |
+| 无 CSP | 只加了 `nosniff` / `X-Frame-Options` / `Referrer-Policy` | 前端大量内联 style，收紧 `style-src` 会直接打坏布局，需要单独评估 |
+
+安全响应头的落地方式分两处，改的时候别漏：**Worker 生成的响应**由
+`apps/server/src/index.js` 的 `withSecurityHeaders()` 加；**静态资源**（`index.html`、
+`/assets/*`）由 Cloudflare 边缘直接返回、根本不进 Worker，所以走 `apps/web/public/_headers`。
+本地 Node 部署两者都经 Worker，看不出这个差别。
 
 ## 关于默认转换后端
 

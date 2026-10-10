@@ -1,0 +1,20 @@
+# 静态资源的安全响应头。
+#
+# 为什么需要这个文件：Worker 代码里的 withSecurityHeaders（apps/server/src/index.js）
+# 只作用于 **Worker 生成的响应**。Cloudflare 默认把命中静态资源的请求直接由边缘返回，
+# 根本不进 Worker —— 于是线上的 index.html 与 /assets/*.js 是**没有**安全头的。
+# 本地 Node 部署全走 Worker，看不出这个差别（是线上核验才发现的）。
+#
+# _headers 恰好相反：只作用于静态资源响应、不作用于 Worker 响应。两者互补，
+# 合起来才是「全站都有安全头」。
+#
+# 注意：本文件不会作为静态资源对外提供，由 Workers 解析。放在 public/ 下是为了
+# 让 vite build 自动拷进 dist/（dist/ 是构建产物，不入库）。
+#
+# CSP 这里也不加：前端虽是打包产物，但用了大量内联 style（Tailwind 的 :style 绑定、
+# CSS 变量），收紧 style-src 会直接打坏布局，需要单独评估。
+
+/*
+	X-Content-Type-Options: nosniff
+	X-Frame-Options: DENY
+	Referrer-Policy: no-referrer

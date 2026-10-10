@@ -524,6 +524,14 @@ export async function handleConvertLink(request, env, ctx, { query }) {
  * target=singbox / shadowrocket 会把节点内联出来；target=clash 输出
  * provider 形态 —— 这与普通 URI 列表输入的表现完全一致，不是快照特有的问题。
  *
+ * ⚠️ 已知风险：SCE 对 clash 目标的输出**不含任何节点**（只有 `proxy-providers:`
+ * 指向输入 URL，没有 `proxies:`）—— 而 SubPilot 对 clash 系 target 本来就会加
+ * `tag:/provider:` 前缀（见 decorateSourceUrl），所以 clash 成品的 `content`
+ * 本身就是一份 provider 配置。把这样一份成品再当输入喂回后端，能不能解析出
+ * 东西取决于 SCE 对 `proxy-providers` 的处理，**尚未完成往返验证**（后端探活
+ * 时它持续 500）。若实测发现 clash 成品链接打不开，退路是改用「活链」
+ * （`url=` 直接指向原始来源，而不是成品快照）。
+ *
  * 拿不到分享码（老数据）或没有对外基地址时返回 ''，调用方退回 /share 直链。
  *
  * @param {{env:object, snap:object, item:{name:string,target?:string,template?:string},

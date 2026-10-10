@@ -644,3 +644,16 @@ html.light body {
 ::-webkit-scrollbar-track {
     background: transparent;
 }
+
+/* 浮层下拉专用实底：自绘下拉叠在页面内容上，沿用 .card 的半透明磨砂
+   会跟下层文字混成一片看不清（设置页的 AI 模型下拉首当其冲）。
+   面板底统一用实色 --c-panel（比 hover 高亮 --c-panel2 暗一档，三主题都成立）；
+   glass 主题同样换掉磨砂底。放在文件末尾以覆盖 html.glass .card 的背景。 */
+.dropdown-solid {
+    background: rgb(var(--c-panel));
+}
+html.glass .dropdown-solid {
+    background: #1e1838; /* glass 的 --c-panel (30 24 56) 实色写法 */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}

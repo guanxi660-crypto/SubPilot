@@ -227,6 +227,35 @@ const HANDLERS = {
         return pos === 'top' ? [...hit, ...rest] : [...rest, ...hit];
     },
 
+    /**
+     * 关键词排序：给一组关键词，节点名**包含**第 i 个关键词的归第 i 组，
+     * 组间按关键词先后排，组内保持原有相对顺序（稳定分区，不改名）。
+     * 同时命中多个关键词时归入优先级最高（数组里最靠前）的那组；
+     * 未命中任何关键词的统一垫底（unmatched: bottom，默认）或置顶（top）。
+     * 匹配大小写不敏感 —— 「IEPL」「iepl」算同一个词。
+     */
+    'Keyword Sort'(nodes, args) {
+        const kws = asArray(args.keywords).map((k) => k.toLowerCase()).filter(Boolean);
+        if (!kws.length) return nodes;
+        const unmatched = args.unmatched === 'top' ? 'top' : 'bottom';
+        const rank = new Map();
+        for (const n of nodes) {
+            const name = String(n.name || '').toLowerCase();
+            let best = Infinity;
+            for (let i = 0; i < kws.length; i++) {
+                // 命中即记组号，但要继续扫完 —— 更靠前的关键词优先级更高
+                if (i < best && name.includes(kws[i])) best = i;
+            }
+            rank.set(n, best);
+        }
+        const hit = [];
+        const rest = [];
+        for (const n of nodes) (rank.get(n) < Infinity ? hit : rest).push(n);
+        // Array#sort 稳定：同优先级的保持原有顺序
+        hit.sort((a, b) => rank.get(a) - rank.get(b));
+        return unmatched === 'top' ? [...rest, ...hit] : [...hit, ...rest];
+    },
+
     /** 重名处理：rename 加序号，delete 只留第一个 */
     'Handle Duplicate'(nodes, args) {
         const action = args.action === 'delete' ? 'delete' : 'rename';
@@ -479,6 +508,20 @@ export const OPERATOR_TYPES = [
             '组内和其余节点都保持原有相对顺序。注意它和「排序」的先后：' +
             '先 Region Pin 再 Sort 会被排序盖掉，想置顶就把 Region Pin 放在 Sort 后面。',
         args: { regions: ['SG'], position: 'top' },
+    },
+    {
+        type: 'Keyword Sort',
+        label: '关键词排序',
+        icon: '🔖',
+        desc: '按关键词把节点分组排序，不改名',
+        usage:
+            '想让名字里带某些词的节点排一起、按词的先后排队时用它。' +
+            'keywords 按优先级填（数组第 1 个的组排最前），名字**包含**该词（不分大小写）即入组；' +
+            '同时命中多个词时归入更靠前那个词的组；' +
+            'unmatched 填 bottom 表示没命中任何词的垫底、top 表示置顶（默认 bottom）。' +
+            '组内保持原有相对顺序，节点名一个不动。例子：keywords: ["IEPL","IPLC","专线"] ' +
+            '会把专线/极速类排最前。注意和「排序」「地区置顶」的先后：后执行的会重排整表。',
+        args: { keywords: ['IEPL', 'IPLC', '专线'], unmatched: 'bottom' },
     },
     {
         type: 'Handle Duplicate',

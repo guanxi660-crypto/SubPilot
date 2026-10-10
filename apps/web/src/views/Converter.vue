@@ -436,6 +436,7 @@ const targetGroups = computed(() => {
         : [
               { value: 'clash', label: 'Clash / Mihomo', group: 'Mihomo Provider' },
               { value: 'singbox', label: 'sing-box', group: '完整配置转换' },
+              { value: 'v2ray', label: 'v2ray（外部）', group: '简单订阅输出' },
               { value: 'shadowrocket', label: 'Shadowrocket', group: '简单订阅输出' },
               { value: 'trojan', label: 'Trojan', group: '简单订阅输出' },
               { value: 'vless', label: 'VLESS', group: '简单订阅输出' },

@@ -48,10 +48,14 @@ const BOOLEAN_PARAMS = new Set([
  *
  * v2ray（base64）与 mixed（base64）更早已移除：
  * v2ray 通用订阅改走本站 raw 通道（/sub?target=raw，不依赖 SCE），见 convert.js。
+ *
+ * 2026-10-10：v2ray 重新上架（label 标「（外部）」）—— 分发链接走本站 raw 通道，
+ * 但转换页**外部链接**转 v2ray 通用订阅还得靠 SCE，本站 raw 只吃本站解析的节点。
  */
 export const SCE_TARGETS = [
     { value: 'clash', label: 'Clash / Mihomo', group: 'Mihomo Provider' },
     { value: 'singbox', label: 'sing-box', group: '完整配置转换' },
+    { value: 'v2ray', label: 'v2ray（外部）', group: '简单订阅输出' },
     { value: 'shadowrocket', label: 'Shadowrocket', group: '简单订阅输出' },
     { value: 'trojan', label: 'Trojan', group: '简单订阅输出' },
     { value: 'vless', label: 'VLESS', group: '简单订阅输出' },
@@ -85,7 +89,7 @@ const LEGACY_TARGETS = [
     { value: 'sssub', label: 'SSSub' },
     // 更早一批（v2ray 通用订阅改走本站 raw 通道时）下线的两项。
     // 一并补进来：当年那次裁剪同样会让存过这两个值的老配置保存失败。
-    { value: 'v2ray', label: 'v2ray' },
+    // （v2ray 已于 2026-10-10 回到 SCE_TARGETS，从 legacy 名单里移除避免重复映射。）
     { value: 'mixed', label: 'Mixed' },
 ];
 

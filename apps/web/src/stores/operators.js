@@ -32,6 +32,7 @@ const FALLBACK_TYPES = [
     { type: 'Name Prefix', label: '名称加前缀', icon: '⟨', desc: '给所有节点名加统一前缀', args: { value: '' } },
     { type: 'Name Suffix', label: '名称加后缀', icon: '⟩', desc: '给所有节点名加统一后缀', args: { value: '' } },
     { type: 'Sort Operator', label: '排序', icon: '⇅', desc: '按名称 / 协议 / 服务器 / 地区排序', args: { sort: 'asc', by: 'region' } },
+    { type: 'Keyword Sort', label: '关键词排序', icon: '🔖', desc: '按关键词把节点分组排序，不改名', args: { keywords: ['IEPL', 'IPLC', '专线'], unmatched: 'bottom' } },
     { type: 'Handle Duplicate', label: '去重处理', icon: '⧉', desc: '重名加序号或删除', args: { action: 'rename' } },
     { type: 'Flag Operator', label: '国旗标识', icon: '🏳', desc: '按地区加国旗 emoji', args: { mode: 'add' } },
     { type: 'Limit Operator', label: '数量截断', icon: '✂', desc: '只保留前 N 个', args: { limit: 100, from: 'head' } },

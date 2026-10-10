@@ -104,7 +104,7 @@
                              框里的字同时当过滤器，Esc / 点外面关闭。 -->
                         <div
                             v-if="modelOpen && models.length"
-                            class="absolute z-30 top-full left-0 right-0 mt-1 card p-1.5 max-h-64 overflow-auto shadow-xl"
+                            class="dropdown-solid absolute z-30 top-full left-0 right-0 mt-1 card p-1.5 max-h-64 overflow-auto shadow-xl"
                         >
                             <div
                                 v-for="m in filteredModels"

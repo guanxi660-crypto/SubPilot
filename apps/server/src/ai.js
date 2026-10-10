@@ -96,6 +96,8 @@ ${taskHint}${chainSection}
    - Sort Operator：全表重排（by: name / type / server / region，sort: asc / desc）
    - Region Pin：把指定地区**置顶/沉底**（regions 填地区码，position: top / bottom），
      组内和其余节点都保持原顺序 —— 想「某地区排最前」它最省事
+   - Keyword Sort：按**关键词**分组排序（keywords 按优先级填，名字包含该词即入组，
+     unmatched: bottom / top 决定未命中的垫底还是置顶），组内保序、不改名
 2. **改名字**（节点都在、顺序不动）
    - Regex Rename（成对「模式, 替换」，支持 $1）、Regex Delete（只删片段）、
      Name Prefix / Name Suffix（统一前后缀）、Flag Operator（加/去国旗）、
@@ -109,6 +111,8 @@ ${taskHint}${chainSection}
 
 ## 常见任务 → JSON 写法对照（直接照这个风格写）
 - 新加坡置顶（不改名）：[{"type":"Region Pin","args":{"regions":["SG"],"position":"top"}}]
+- 名字带「IEPL / IPLC / 专线」的排前面，其余垫底：
+  [{"type":"Keyword Sort","args":{"keywords":["IEPL","IPLC","专线"],"unmatched":"bottom"}}]
 - SG 置顶且其余按地区排（先排后钉，顺序不能反）——
   [{"type":"Sort Operator","args":{"sort":"asc","by":"region"}},
    {"type":"Region Pin","args":{"regions":["SG"],"position":"top"}}]

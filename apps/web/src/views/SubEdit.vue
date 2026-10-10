@@ -196,14 +196,14 @@
                                 :style="contentEdH != null ? { height: `${contentEdH}px` } : undefined"
                                 placeholder="ss://... 或&#10;proxies:&#10;  - name: xxx"
                             />
-                            <!-- 拉伸手柄：盖在编辑器右下角，纵向拖动 -->
+                            <!-- 拉伸热区：整个底边可拖（hover 显示高亮线提示） -->
                             <div
                                 data-ed-grip
-                                class="hidden lg:flex absolute bottom-0 right-0 w-4 h-4 z-10 cursor-ns-resize items-center justify-center opacity-40 hover:opacity-100 transition-opacity"
-                                title="拖动调整高度（下方 JSON 卡随之下移，底边保持对齐）"
+                                class="group absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize"
+                                title="拖动调整高度"
                                 @mousedown.prevent="startEdResize"
                             >
-                                <span class="block w-3 h-1 rounded-full bg-slate-400"></span>
+                                <span class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-transparent group-hover:bg-sky-400/70 transition-colors"></span>
                             </div>
                         </div>
                     </div>

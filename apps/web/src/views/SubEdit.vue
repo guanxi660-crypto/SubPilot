@@ -47,7 +47,7 @@
                 :style="gridMinH != null ? { minHeight: `${gridMinH}px` } : undefined"
             >
                 <!-- 预览 -->
-                <div class="card p-6 fade-up lg:col-span-1 flex flex-col min-h-0">
+                <div ref="previewCardEl" class="card p-6 fade-up lg:col-span-1 flex flex-col min-h-0 relative">
                     <div class="flex items-center gap-3 flex-wrap shrink-0">
                         <div class="text-sm font-semibold">实时预览</div>
                         <span v-if="preview.loading" class="text-xs text-slate-500">解析中…</span>
@@ -64,8 +64,27 @@
                         <div v-for="(l, i) in preview.log" :key="i">{{ l }}</div>
                     </div>
 
-                    <div class="mt-4 flex-1 min-h-0 overflow-auto">
-                        <NodeList :nodes="preview.nodes" />
+                    <!-- 节点列表：默认 flex-1 随卡片伸缩、内部滚动；列表右下角
+                         手柄可接管成显式高度（网格随之顶高、页面变长），与
+                         「节点内容」编辑器的手柄同一套交互 -->
+                    <div class="mt-4 flex-1 min-h-0 flex flex-col relative" :class="previewListH == null ? '' : 'lg:flex-none'">
+                        <div
+                            data-preview-list
+                            class="overflow-auto grow min-h-0"
+                            :style="previewListH != null ? { height: `${previewListH}px` } : undefined"
+                        >
+                            <NodeList :nodes="preview.nodes" />
+                        </div>
+
+                        <!-- 拉伸手柄：盖在列表区右下角，纵向拖动 -->
+                        <div
+                            data-preview-grip
+                            class="hidden lg:flex absolute bottom-0 right-0 w-4 h-4 z-10 cursor-ns-resize items-center justify-center opacity-40 hover:opacity-100 transition-opacity"
+                            title="拖动调整节点列表高度"
+                            @mousedown.prevent="startPreviewResize"
+                        >
+                            <span class="block w-3 h-1 rounded-full bg-slate-400"></span>
+                        </div>
                     </div>
                 </div>
 
@@ -179,8 +198,19 @@
                         </div>
                     </div>
 
-                    <!-- 脚本处理：flex-1 与基本信息按 1:3 分高度，底边即与左侧预览卡片对齐 -->
-                    <div class="card p-5 fade-up flex-1 min-h-[190px] flex flex-col" style="--d:150ms">
+                    <!-- 脚本处理：flex-1 与基本信息按 1:3 分高度，底边即与左侧预览卡片对齐。
+                         min-h-[240px]：OperatorEditor 固定部分（头部按钮行 + 卡片
+                         padding）实测要 159px，空态算子列表还要 70px —— 190px 的
+                         旧下限会让列表只剩 38px、连空态都内滚。
+                         算子加多、内容需求超过一屏份额时 jsonFlexNone 切
+                         lg:flex-none（高度=内容），配合 gridMinH 顶高网格 ——
+                         3:1 的 flex 比例不知道内容需求，会把顶高的空间全塞给
+                         信息卡、JSON 卡永远只有 1/4 继续内滚，所以必须在这里切。 -->
+                    <div
+                        class="card p-5 fade-up flex-1 min-h-[240px] flex flex-col"
+                        :class="jsonFlexNone ? 'lg:flex-none' : ''"
+                        style="--d:150ms"
+                    >
                         <div class="flex items-center gap-2 flex-wrap shrink-0">
                             <div class="text-sm font-semibold">JSON 脚本处理</div>
                             <span class="text-[11px] text-slate-600">
@@ -212,7 +242,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMessage } from 'naive-ui';
 import { api } from '../stores/auth.js';
@@ -250,24 +280,53 @@ const form = reactive({
 
 const preview = reactive({ loading: false, error: '', nodes: [], log: [], total: null, format: '' });
 
-// ---- 节点内容编辑器的手动高度 ----
-// contentEdH = null → 跟随布局自适应（flex-1），整页锁定一屏、底边对齐；
-// 数字 → 用户拖出来的固定高度（px）。跟老版 resize 一样自由拉伸：
-// 编辑器变高多少，网格最小高度就顶高多少 —— JSON 卡高度不变、
-// 整体往下移，两列底边仍然对齐（对齐在变长后的网格底边上），
-// 页面变长出现滚动。向上拖则编辑器自己缩小（下限 140），网格
-// 最小不低于原来的一屏高度，此时 JSON 卡吃掉多出的空间。
-// gridMinH 就是那个网格最小高度（null = 不干预）。
+// ---- 网格高度管理（编辑页核心布局）----
+//
+// 三股需求都汇到 gridMinH（computed，取各项最大值）：
+//   1. 拖动节点内容编辑器手柄（edDragMinH）—— 编辑器长多少网格顶高多少；
+//   2. 拖动预览节点列表手柄（prevDragMinH）—— 同上，左侧列表自由拉伸；
+//   3. JSON 卡自适应（autoMinH）—— 脚本算子越加越多时，JSON 卡内容
+//      超过一屏分配的高度，网格自动顶高、页面变长滚动（用户点名需求：
+//      默认尺寸不变，但算子多时允许超过整屏）。删算子后需求下降、
+//      自动缩回（底线仍是一屏基线 680px）。
+// 默认态三者都无干预 → 整页锁定一屏、两列底边对齐。
 const contentEdH = ref(null);
-const gridMinH = ref(null);
+const edDragMinH = ref(null);
+const prevDragMinH = ref(null);
+const autoMinH = ref(null);
+// JSON 卡内容需求超过一屏份额时切 flex-none（高度=内容），见 recomputeAuto
+const jsonFlexNone = ref(false);
 // 一屏基线：首次拖动时记下网格当时的（一屏）高度。之后每次拖动都
 // 以它为基准换算网格最小高度 —— 不能用「当前网格高度」当基准，
 // 否则向上拖回时 max() 会卡在上一次顶高的高度上回不来。
 const gridBaseH = ref(null);
 const contentEdWrap = ref(null);
+// 预览节点列表的手动高度（null = 跟随布局）
+const previewListH = ref(null);
+const previewCardEl = ref(null);
 
 const EDITOR_MIN = 140;
 const EDITOR_MAX = 3000;
+const JSON_GAP = 16; // 右列两张卡的 gap-4
+
+/** 三股需求的合成值；都不干预时不输出 style */
+const gridMinH = computed(() => {
+    const vals = [edDragMinH.value, prevDragMinH.value, autoMinH.value].filter((v) => v != null);
+    return vals.length ? Math.max(...vals) : null;
+});
+
+/** 通用拖拽装配：mousedown 起点算一次，move 回调里做算术 */
+function beginDrag(e, onMove) {
+    const move = (ev) => onMove(ev);
+    const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        document.body.style.userSelect = '';
+    };
+    document.body.style.userSelect = 'none'; // 拖动时别把编辑器里的文本一起选中
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+}
 
 function startEdResize(e) {
     const wrap = contentEdWrap.value;
@@ -282,28 +341,102 @@ function startEdResize(e) {
     const base = gridBaseH.value;
     const startY = e.clientY;
 
-    const move = (ev) => {
+    beginDrag(e, (ev) => {
         const h = Math.round(Math.min(EDITOR_MAX, Math.max(EDITOR_MIN, edH0 + ev.clientY - startY)));
         contentEdH.value = h;
         // 编辑器长多少网格顶高多少（不低于一屏基线）；向上缩时网格
         // 回到一屏、JSON 卡随之变高，底边始终对齐
-        gridMinH.value = Math.round(Math.max(base, base + (h - edH0)));
-    };
-    const up = () => {
-        window.removeEventListener('mousemove', move);
-        window.removeEventListener('mouseup', up);
-        document.body.style.userSelect = '';
-    };
-    document.body.style.userSelect = 'none'; // 拖动时别把编辑器里的文本一起选中
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+        edDragMinH.value = Math.round(Math.max(base, base + (h - edH0)));
+    });
+}
+
+/** 预览列表手柄：拖动改列表显式高度，网格按「卡片头部 + 列表高」顶高 */
+function startPreviewResize(e) {
+    const card = previewCardEl.value;
+    const list = card?.querySelector('[data-preview-list]');
+    if (!card || !list) return;
+    const chrome = card.offsetHeight - list.offsetHeight; // 头部 + padding，拖动中不变
+    const startY = e.clientY;
+
+    beginDrag(e, (ev) => {
+        const h = Math.round(Math.max(120, (previewListH.value ?? list.offsetHeight) + ev.clientY - startY));
+        previewListH.value = h;
+        prevDragMinH.value = chrome + h;
+    });
+}
+
+/**
+ * JSON 卡自适应测量（绝对式，可收缩）：
+ *   网格需求 = 信息卡需求 + gap + JSON 卡需求，需求 ≤ 一屏（680）时输出
+ *   null 不干预 —— 默认态/算子很少时锁定一屏，算子加多、需求超过一屏
+ *   后网格被顶高、页面变长；删算子后需求回落、自动缩回。
+ * 两张卡的需求都用「chrome + 内容需求」计：
+ *   · chrome = 卡片里除滚动区外的固定部分（offsetHeight - 编辑器/列表高），
+ *     与 flex 拉伸无关，是常数；
+ *   · 信息卡内容需求 = max(140, contentEdH || 140)（编辑器下限 / 手动高度）；
+ *   · JSON 卡内容需求 = 算子列表**子元素实测和 + space-y 间距** —— 不能用
+ *     scrollHeight：内容少于可视时 scrollHeight 会虚报成可视高，测不出
+ *     「需求已低于分配」，导致删算子后网格缩不回去。
+ */
+function recomputeAuto() {
+    if (window.innerWidth < 1024) {
+        // 小屏本来就是堆叠流式滚动，不需要也不应该干预
+        autoMinH.value = null;
+        return;
+    }
+    const all = [...document.querySelectorAll('main .card')];
+    const info = all.find((c) => (c.innerText || '').trimStart().startsWith('基本信息'));
+    const json = all.find((c) => (c.innerText || '').trimStart().startsWith('JSON 脚本处理'));
+    const list = json?.querySelector('[data-op-list]');
+    if (!info || !json || !list) {
+        autoMinH.value = null;
+        return;
+    }
+    const ed = info.querySelector('.code-editor');
+
+    // 列表内容实高：子元素求和 + space-y-2（8px）间距
+    const kids = [...list.children];
+    const listContent = kids.length
+        ? kids.reduce((s, k) => s + k.offsetHeight, 0) + Math.max(0, kids.length - 1) * 8
+        : 0;
+
+    const infoChrome = ed ? info.offsetHeight - ed.offsetHeight : 0;
+    const infoNeed = ed
+        ? infoChrome + Math.max(EDITOR_MIN, contentEdH.value ?? EDITOR_MIN)
+        : info.scrollHeight;
+    const jsonChrome = json.offsetHeight - list.offsetHeight;
+    const jsonNeed = jsonChrome + listContent;
+    const rightNeed = Math.round(infoNeed + JSON_GAP + jsonNeed);
+
+    let leftNeed = 0;
+    if (previewListH.value != null && previewCardEl.value) {
+        leftNeed = previewCardEl.value.scrollHeight; // 手动模式卡片高度=内容
+    }
+    const need = Math.round(Math.max(rightNeed, leftNeed));
+    // 需求没超过网格 CSS 下限（680）就保持 3:1 弹性分配，让「锁定一屏」照常生效；
+    // 超过一屏 → JSON 卡切 flex-none（高度=内容），网格按需求顶高。
+    // 3:1 比例本身不知道内容需求：若只顶网格不切 flex-none，多出来的空间
+    // 会按 3:1 全塞给信息卡，JSON 卡永远只有 1/4、继续内滚。
+    const over = need > 682;
+    autoMinH.value = over ? need : null;
+    jsonFlexNone.value = over;
 }
 
 function resetEdHeight() {
     contentEdH.value = null;
-    gridMinH.value = null;
+    edDragMinH.value = null;
     gridBaseH.value = null;
 }
+
+// 算子增删/改参、视口变化都会改变 JSON 卡内容需求 → 重算
+watch(() => form.process, () => nextTick(recomputeAuto), { deep: true });
+onMounted(() => {
+    nextTick(recomputeAuto);
+    window.addEventListener('resize', recomputeAuto);
+});
+onBeforeUnmount(() => {
+    window.removeEventListener('resize', recomputeAuto);
+});
 
 const renamed = computed(() => !isNew.value && form.name !== originalName.value);
 const nameWarn = computed(() => renamed.value);

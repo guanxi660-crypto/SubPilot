@@ -1,10 +1,16 @@
-// 订阅编辑页布局回归：整页锁定一屏、两列底边对齐、矮窗口优雅回退为页面滚动。
+// 订阅编辑页布局回归：默认一屏锁定、算子多时 JSON 卡自适应超屏、两列底边对齐、矮窗口优雅回退。
 //
-// 守的设计（2026-10 重构）：
-//   编辑订阅是表单页，默认打开就该整页可见 —— 此前页面比视口高 149px，
-//   两列底部各有 84px 落在折叠线以下、被底部悬浮条盖住，要滚一下才看得到。
-//   现在容器 min-h-full + flex-col，网格 grow basis-0 吃掉剩余高度；
-//   节点内容编辑器 lg:flex-1 跟着窗口高度伸缩；预览列表与 JSON 卡内部自己滚。
+// 守的设计（2026-10 重构 + 0.1.1 自适应增强）：
+//   编辑订阅是表单页，默认打开就该整页可见 —— 容器 min-h-full + flex-col，
+//   网格 grow basis-0 吃掉剩余高度；节点内容编辑器 lg:flex-1 跟着窗口高度伸缩；
+//   预览列表与 JSON 卡内部自己滚。
+//
+//   0.1.1 新语义：**没有/少算子时页面仍锁定一屏**；但加了脚本算子后 JSON 卡
+//   允许自适应拉伸超过整屏（jsonFlexNone → lg:flex-none，高度=内容），此时：
+//     - JSON 卡与预览列表都不再有内部滚动（内容完整展开）
+//     - 页面整体滚动，两列底边依旧对齐（items-stretch）
+//     - 底部悬浮条依旧不压内容
+//   预览列表右下角有拖拽手柄（startPreviewResize），可手动顶高网格。
 //
 //   两个隐蔽的坑，改动时别踩：
 //   1. flex-basis: 0%（flex-1 的写法）在**容器高度不定**（min-h-full）时按规范
@@ -12,10 +18,12 @@
 //      全作废。必须用定长 basis（basis-0 = 0px）。
 //   2. 网格的隐式 auto 行按内容的 max-content 撑高，min-h-0 切不断（那只是允许
 //      收缩，行高照样按内容算）。必须显式 lg:grid-rows-[minmax(0,1fr)]。
+//   3. JSON 自适应需求用**子元素求和**而非 scrollHeight —— 内容少于可视高时
+//      scrollHeight 虚报为 clientHeight，删算子后缩不回去。
 //
 // 用法：node scripts/verify-subedit-layout.mjs
-// 前置：npm run dev:server（8795）+ npm run build
-// 自带播种与清理：建一条本地订阅（15 个节点 + 5 个算子），收尾删除。
+// 前置：npm run dev:server（8795）+ npm run build（构建后须重启服务，dist 有内存缓存）
+// 自带播种与清理：两条本地订阅（无算子 / 5 算子，各 15 节点），收尾删除。
 
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -31,7 +39,8 @@ const exe = join(root, readdirSync(root).find((d) => d.startsWith('chromium-')),
 const BASE =
     process.argv[2] || process.env.SUBPILOT_BASE || process.env.SPX_BASE || 'http://127.0.0.1:8795';
 const TOKEN = process.env.SPX_TOKEN || 'dev-local-token';
-const NAME = '_ui_check_layout';
+const NAME_PLAIN = '_ui_check_layout';
+const NAME_OPS = '_ui_check_layout_ops';
 const WIDTH = 1320;
 
 let pass = 0;
@@ -51,12 +60,13 @@ const api = (p, o = {}) => fetch(`${BASE}${p}`, { ...o, headers: { ...H, ...(o.h
 
 console.log(`\n== 订阅编辑页布局回归 @ ${BASE} ==\n`);
 
-// ---- 播种：本地订阅，内容与算子都给足（内容多到 CodeMirror 天然想撑高页面）----
+// ---- 播种：两条本地订阅 ----
 const NODES = Array.from(
     { length: 15 },
     (_, i) =>
         `vless://b9721119-7328-4c2a-842d-d4b6be797b28@192.168.${i + 1}.10:443?encryption=none&security=tls&sni=vpn.example.com&type=ws&host=vpn.example.com#节点${i + 1}`
 ).join('\n');
+// 足量算子：JSON 卡内容需求会超过一屏阈值（682px），触发 jsonFlexNone
 const PROCESS = [
     { type: 'Useless Filter', args: {} },
     { type: 'Regex Filter', args: { regex: ['广告'], mode: 'exclude' } },
@@ -65,19 +75,22 @@ const PROCESS = [
     { type: 'Sort Operator', args: { sort: 'asc', by: 'region' } },
 ];
 
-{
+for (const [name, process] of [
+    [NAME_PLAIN, []],
+    [NAME_OPS, PROCESS],
+]) {
     const r = await api('/api/subs', {
         method: 'POST',
-        body: JSON.stringify({ name: NAME, source: 'local', content: NODES, process: PROCESS }),
+        body: JSON.stringify({ name, source: 'local', content: NODES, process }),
     });
-    ok('播种本地订阅（15 节点 + 5 算子）', r.status === 201 || r.status === 200, `HTTP ${r.status}`);
+    ok(`播种 ${name}${process.length ? '（15 节点 + 5 算子）' : '（15 节点，无算子）'}`, r.status === 201 || r.status === 200, `HTTP ${r.status}`);
 }
 
 const browser = await chromium.launch({ executablePath: exe });
 const errors = [];
 
 // 每档视口独立 context，互不污染
-async function probeAt(height, { scrollToBottom = false } = {}) {
+async function probeAt(name, height, { scrollToBottom = false } = {}) {
     const ctx = await browser.newContext({ viewport: { width: WIDTH, height } });
     await ctx.addInitScript((t) => localStorage.setItem('sp_token', t), TOKEN);
     const page = await ctx.newPage();
@@ -85,7 +98,7 @@ async function probeAt(height, { scrollToBottom = false } = {}) {
     page.on('console', (m) => {
         if (m.type() === 'error') errors.push(m.text().split('\n')[0]);
     });
-    await page.goto(`${BASE}/#/subs/edit/${encodeURIComponent(NAME)}`, { waitUntil: 'networkidle' });
+    await page.goto(`${BASE}/#/subs/edit/${encodeURIComponent(name)}`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1500);
     if (scrollToBottom) {
         await page.evaluate(() => {
@@ -126,13 +139,13 @@ async function probeAt(height, { scrollToBottom = false } = {}) {
     return m;
 }
 
-// ---- [1] 正常视口：整页锁定一屏，默认打开全部可见 ----
+// ---- [1] 无算子订阅 @860：整页锁定一屏，默认打开全部可见 ----
 {
-    const m = await probeAt(860);
-    console.log(`    @${WIDTH}x860：编辑器 ${m.ed?.h}px · 基本信息 ${m.info.h}px · JSON 卡 ${m.json.h}px · 悬浮条上沿 ${m.bar.top}`);
+    const m = await probeAt(NAME_PLAIN, 860);
+    console.log(`    无算子 @${WIDTH}x860：编辑器 ${m.ed?.h}px · JSON 卡 ${m.json.h}px · 超出 ${m.overScroll}px`);
     ok('节点内容编辑器已渲染', !!m.ed);
     ok('编辑器高度自适应（不再是写死的 384px）', m.ed && m.ed.h > 0 && m.ed.h < 384, `${m.ed?.h}px`);
-    ok('页面不滚动（整页锁定一屏）', !m.canScroll, `超出 ${m.overScroll}px`);
+    ok('无算子时页面不滚动（整页锁定一屏）', !m.canScroll, `超出 ${m.overScroll}px`);
     ok(
         'JSON 卡底边没被悬浮条压住',
         m.json.bottom <= m.bar.top,
@@ -155,9 +168,9 @@ async function probeAt(height, { scrollToBottom = false } = {}) {
     );
 }
 
-// ---- [2] 编辑器随视口高度伸缩 ----
+// ---- [2] 无算子订阅 @1200：编辑器随视口高度伸缩 ----
 {
-    const tall = await probeAt(1200);
+    const tall = await probeAt(NAME_PLAIN, 1200);
     ok(
         '高视口下编辑器跟着变高（不再浪费空间）',
         tall.ed && tall.ed.h > 380,
@@ -166,18 +179,37 @@ async function probeAt(height, { scrollToBottom = false } = {}) {
     ok('高视口下页面同样不滚动', !tall.canScroll, `超出 ${tall.overScroll}px`);
 }
 
-// ---- [3] 矮窗口：优雅回退为页面滚动，内容不被压扁 ----
+// ---- [3] 5 算子订阅 @860：JSON 卡自适应超屏属预期 ----
 {
-    const short = await probeAt(600);
-    console.log(`    @${WIDTH}x600：页面超出 ${short.overScroll}px · 编辑器 ${short.ed?.h}px`);
+    const m = await probeAt(NAME_OPS, 860);
+    console.log(`    5 算子 @${WIDTH}x860：页面超出 ${m.overScroll}px · JSON 卡 ${m.json.h}px · 底边 预览 ${m.preview.bottom} / JSON ${m.json.bottom}`);
+    ok('有算子时页面允许滚动（JSON 卡自适应超屏）', m.canScroll && m.overScroll > 100, `超出 ${m.overScroll}px`);
+    ok('JSON 卡完整展开、无内部滚动', m.spill.json <= 1, `内滚 ${m.spill.json}px`);
+    ok('预览列表同样完整展开、无内部滚动', m.spill.preview <= 1, `内滚 ${m.spill.preview}px`);
+    ok(
+        '超屏后两列底边依旧对齐',
+        Math.abs(m.preview.bottom - m.json.bottom) <= 1,
+        `预览 ${m.preview.bottom} / JSON ${m.json.bottom}`
+    );
+    const bottom = await probeAt(NAME_OPS, 860, { scrollToBottom: true });
+    ok(
+        '超屏滚到底后 JSON 卡底边没被悬浮条压住',
+        bottom.json.bottom <= bottom.bar.top,
+        bottom.json.bottom > bottom.bar.top ? `被压 ${bottom.json.bottom - bottom.bar.top}px` : `余量 ${bottom.bar.top - bottom.json.bottom}px`
+    );
+}
+
+// ---- [4] 矮窗口：优雅回退为页面滚动，内容不被压扁 ----
+{
+    const short = await probeAt(NAME_OPS, 600);
+    console.log(`    5 算子 @${WIDTH}x600：页面超出 ${short.overScroll}px · 编辑器 ${short.ed?.h}px`);
     ok('矮窗口下页面恢复滚动（不硬塞）', short.canScroll, `超出 ${short.overScroll}px`);
     ok(
         '矮窗口下卡片内容同样不溢出',
         short.spill.info <= 1 && short.spill.json <= 1 && short.spill.preview <= 1,
         `基本信息 ${short.spill.info} / JSON ${short.spill.json} / 预览 ${short.spill.preview}`
     );
-    // 滚到底验证悬浮条依旧不压内容（回退成页面滚动后，默认位置看不到底部是正常的）
-    const bottom = await probeAt(600, { scrollToBottom: true });
+    const bottom = await probeAt(NAME_OPS, 600, { scrollToBottom: true });
     ok(
         '矮窗口滚到底后 JSON 卡底边没被悬浮条压住',
         bottom.json.bottom <= bottom.bar.top,
@@ -189,9 +221,14 @@ ok('无控制台错误', errors.length === 0, errors.slice(0, 3).join(' || '));
 
 // ---- 收尾 ----
 await browser.close();
-await api(`/api/sub/${encodeURIComponent(NAME)}`, { method: 'DELETE' });
+for (const name of [NAME_PLAIN, NAME_OPS]) {
+    await api(`/api/sub/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
 const left = await (await api('/api/subs')).json();
-ok('收尾：临时订阅已清理', !(left.data || []).some((s) => s.name === NAME));
+ok(
+    '收尾：临时订阅已清理',
+    !(left.data || []).some((s) => s.name === NAME_PLAIN || s.name === NAME_OPS)
+);
 
 console.log(`\n== 结果：${pass} 通过 / ${fail} 失败 ==\n`);
 process.exit(fail ? 1 : 0);

@@ -58,6 +58,7 @@
         <div
             v-if="mode === 'card'"
             class="mt-3 space-y-2"
+            data-op-list
             :class="fill ? 'flex-1 min-h-0 overflow-auto pr-1' : ''"
         >
             <div v-if="!list.length" class="text-xs text-slate-600 py-4 text-center border border-dashed border-line rounded-xl">

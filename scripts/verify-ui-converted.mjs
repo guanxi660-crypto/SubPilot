@@ -93,7 +93,11 @@ const body = () => page.locator('body').innerText();
 ok('页面不再出现「预览链接（含管理令牌…）」', !(await body()).includes('含管理令牌'));
 ok('页面不再出现「仅本机排障用」', !(await body()).includes('仅本机排障用'));
 // 分发链接区是「有可用链接才显示」的 —— 刚进页面什么都没选，本就该是隐藏的
-ok('未选来源时分发链接区隐藏', !(await body()).includes('分发链接（带派生只读密钥'));
+// ⚠️ 判定锚点用「带派生只读密钥」而不是整句：那块文案后来改成了
+// 「订阅分发链接（编辑后的节点，不转换；带派生只读密钥，…）」，而脚本一直还在找
+// 旧串「分发链接（带派生只读密钥」—— 括号前多了一串字，永远匹配不上。
+// 于是下面两条断言恒真 / 恒假，「多选时分发链接消失」这个真正要守的回归反而失守了。
+ok('未选来源时分发链接区隐藏', !(await body()).includes('带派生只读密钥'));
 
 // ---- [2] 多选来源时分发链接不能消失 ----
 // 订阅卡是「输入源」模块里的胶囊按钮，文本就是订阅名。
@@ -109,13 +113,13 @@ const subNames = ((await (await api('/api/subs')).json()).data || [])
 if (subNames.length >= 2) {
     await pick(subNames[0]);
     const withOne = await body();
-    ok('单选时分发链接出现', withOne.includes('分发链接（带派生只读密钥'), '');
+    ok('单选时分发链接出现', withOne.includes('带派生只读密钥'), '');
     ok('单选时 feed 行出现', /feed：http/.test(withOne));
 
     await pick(subNames[1]);
     const withTwo = await body();
-    ok('多选时分发链接不消失', withTwo.includes('分发链接（带派生只读密钥'), '');
-    ok('多选时链接仍不含管理令牌', !/token=/.test(withTwo.match(/分发链接[^\n]*\n([^\n]+)/)?.[1] || ''));
+    ok('多选时分发链接不消失', withTwo.includes('带派生只读密钥'), '');
+    ok('多选时链接仍不含管理令牌', !/token=/.test(withTwo.match(/带派生只读密钥[^\n]*\n([^\n]+)/)?.[1] || ''));
     ok('多选时 feed 行仍在', /feed：http/.test(withTwo));
 
     // 清掉选择，回到空态

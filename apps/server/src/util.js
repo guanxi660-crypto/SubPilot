@@ -20,6 +20,27 @@ export function fail(message, status = 400, details = '') {
     return json({ status: 'failed', message, ...(details ? { details } : {}) }, status);
 }
 
+/**
+ * 带 HTTP 状态码的业务异常。
+ *
+ * 为什么需要它：有些校验只能发生在**深层工具函数**里（比如 normalizeSub 要挡住
+ * 超限的订阅正文），而这类函数此前只能「返回错误串」或「静默放行」——
+ * 返回串没法穿过 mutate 的回调，静默放行又等于没挡。于是第二道兜底要么不存在，
+ * 要么退化成一个裸 Error 被入口统一翻成 500（审计 M5 里提到的「500 而不是明确
+ * 拒绝」）。抛这个异常就能一路穿过 mutate，由 index.js 的 catch 翻成对应状态码。
+ *
+ * `expose: true` 是给入口看的开关 —— 只有明确标记过的异常才把 message 回给客户端，
+ * 其余异常一律折叠成「服务器内部错误」，避免把堆栈 / 内部路径泄漏出去。
+ */
+export class ApiError extends Error {
+    constructor(message, status = 400) {
+        super(message);
+        this.name = 'ApiError';
+        this.status = status;
+        this.expose = true;
+    }
+}
+
 export function text(body, status = 200, contentType = 'text/plain;charset=UTF-8', extraHeaders = {}) {
     return new Response(body, { status, headers: { 'Content-Type': contentType, ...extraHeaders } });
 }

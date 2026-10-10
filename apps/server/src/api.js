@@ -10,16 +10,27 @@
 //     · POST /api/shares        → 新建的那一条分享码
 //     · POST /api/feedkey/rotate→ { rotatedAt }
 //     · POST /api/settings      → 脱敏后的设置对象
-//     · POST /api/backup/import → 合并统计 { added, updated, skipped, warnings }
+//     · POST /api/backup/import → 合并统计 { added, updated, skipped, settingsUpdated, warnings }
 //   这些操作不影响前端缓存的集合，所以不套用上面那条约定。
 
-import { ok, fail, isPlainObject, validateName, toStringArray, pick, nowIso, randId, maskSecret } from './util.js';
-import { loadSnapshot, mutate, loadStats, clearStats } from './storage.js';
+import {
+    ok,
+    fail,
+    isPlainObject,
+    validateName,
+    toStringArray,
+    pick,
+    nowIso,
+    randId,
+    maskSecret,
+    ApiError,
+} from './util.js';
+import { loadSnapshot, mutate, loadStats, clearStats, MAX_STATS_ITEMS } from './storage.js';
 import { resolveBackend, probeBackend, SCE_TARGETS } from './sce.js';
 import { runPipeline, previewText, fetchSubText } from './pipeline.js';
 import { buildLinks, resolveSourceRefs, adhocSpec } from './convert.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
-import { handleTemplates } from './templates.js';
+import { handleTemplates, sanitizeProcess } from './templates.js';
 // 版本号单一事实来源 = apps/server/package.json。
 // 之前在 utils/env 里硬编码 '0.1.0'，升 package.json 版本号它纹丝不动
 // （左下角一直 v0.1.0 的 bug 就这么来的）。wrangler/esbuild 打包时会把
@@ -37,6 +48,20 @@ const ALLOWED_FILE_EXT = [
 ];
 const MAX_FILE_BYTES = 512 * 1024;
 
+/**
+ * 本地订阅正文上限（审计 M5）。
+ *
+ * 此前只有文件和成品有上限（512KiB / 16MiB），**唯独订阅正文是敞开的** ——
+ * 而它恰恰是最容易被塞进大东西的地方（机场节点列表、整份规则集）。
+ * Cloudflare KV 单个 value 上限 25MiB，快照是「几个数组 + 一份设置」整包序列化，
+ * 一条超限订阅就足以让 `writeSnapshot` 失败 → `mutate()` 抛异常 → 该次写操作 500，
+ * 而且失败点可能在业务逻辑已执行之后，观感是「提示失败但部分状态已变」。
+ *
+ * 取 8MiB：比成品（16MiB）小一档，因为快照里装的是**所有**订阅之和；
+ * 又比文件（512KiB）大一档，因为真实订阅正文经常有几 MB。
+ */
+const MAX_SUB_BYTES = 8 * 1024 * 1024;
+
 // ---------------------------------------------------------------- 小工具
 
 /**
@@ -46,6 +71,18 @@ const MAX_FILE_BYTES = 512 * 1024;
  */
 function fileBytes(content) {
     return new TextEncoder().encode(String(content ?? '')).length;
+}
+
+/** 人类可读的体积，用于报错文案（不追求精确，够用户判断「超了多少」） */
+function fmtBytes(n) {
+    if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MiB`;
+    if (n >= 1024) return `${Math.round(n / 1024)}KiB`;
+    return `${n}B`;
+}
+
+/** 订阅正文超限用 413，其余校验失败用 400 —— 前端据此区分提示语气 */
+function subErrorStatus(body) {
+    return fileBytes(body?.content) > MAX_SUB_BYTES ? 413 : 400;
 }
 
 async function readJson(request) {
@@ -258,7 +295,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
 
     if (seg[0] === 'subs' && method === 'POST') {
         const err = validateSub(body);
-        if (err) return fail(err, 400);
+        if (err) return fail(err, subErrorStatus(body));
         const { snap, result } = await mutate(env, (s) => {
             if (s.subs.some((x) => x.name === body.name)) return { error: '名称已被占用' };
             const item = normalizeSub(body);
@@ -280,7 +317,13 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
             const { snap, result } = await mutate(env, (s) => {
                 const idx = s.subs.findIndex((x) => x.name === name);
                 if (idx < 0) return { error: `订阅不存在：${name}`, status: 404 };
-                const merged = normalizeSub({ ...s.subs[idx], ...pick(body, SUB_FIELDS) }, s.subs[idx]);
+                const mergedInput = { ...s.subs[idx], ...pick(body, SUB_FIELDS) };
+                // 校验**合并后的结果**，不是请求体（审计 M5，与 PATCH /api/file 同款缺口）：
+                // 「只改备注」的请求里没有 content，但库里那条本身可能已经超限；
+                // 「把远程订阅改成 local 再贴上 30MiB 正文」更是从请求体的字面看不出来。
+                const verr = validateSub({ ...mergedInput, name });
+                if (verr) return { error: verr, status: subErrorStatus(mergedInput) };
+                const merged = normalizeSub(mergedInput, s.subs[idx]);
                 merged.name = name; // 改名走单独的 rename 接口
                 merged.createdAt = s.subs[idx].createdAt;
                 merged.updatedAt = nowIso();
@@ -493,21 +536,23 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
     // ---- 预览 ----
 
     if (seg[0] === 'preview' && seg[1] === 'sub' && method === 'POST') {
-        const sub = normalizeSub(body);
+        // normalizeSub 放在 try 里面：它现在会因为正文超限抛 ApiError（审计 M5），
+        // 抛在外面就没有对应的 catch，会被入口翻成 500。
         try {
+            const sub = normalizeSub(body);
             let text = '';
             if (sub.source === 'local') text = sub.content || '';
             else {
                 const urls = toStringArray(sub.url);
                 if (!urls.length) return fail('请先填写订阅地址', 400);
                 const chunks = [];
-                for (const u of urls) chunks.push(await fetchSubText(u, sub.ua));
+                for (const u of urls) chunks.push(await fetchSubText(u, sub.ua, env));
                 text = chunks.join('\n');
             }
             const r = previewText(text, sub.process);
             return ok({ format: r.format, processed: r.summary, log: r.log, total: r.summary.length });
         } catch (e) {
-            return fail(e.message, 400);
+            return fail(e.message, e.status || 400);
         }
     }
 
@@ -516,12 +561,12 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         const process = Array.isArray(body.process) ? body.process : [];
         try {
             let text = String(body.content || '');
-            if (!text && body.url) text = await fetchSubText(String(body.url), String(body.ua || ''));
+            if (!text && body.url) text = await fetchSubText(String(body.url), String(body.ua || ''), env);
             if (!text) return fail('请提供订阅内容或地址', 400);
             const r = previewText(text, process);
             return ok({ format: r.format, processed: r.summary, log: r.log, total: r.summary.length });
         } catch (e) {
-            return fail(e.message, 400);
+            return fail(e.message, e.status || 400);
         }
     }
 
@@ -537,7 +582,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
             const r = await runPipeline(env, snap, { sources, process: body.process || [] });
             return ok({ format: r.format, processed: r.summary, log: r.log, total: r.summary.length });
         } catch (e) {
-            return fail(e.message, 400);
+            return fail(e.message, e.status || 400);
         }
     }
 
@@ -668,12 +713,18 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 total: items.reduce((a, b) => a + b.count, 0),
                 itemCount: new Set(items.map((i) => `${i.type}|${i.item}`)).size,
                 ipCount: ips.size,
+                // 上限可见化（审计 M5）：条目数长期贴着上限时，用户需要知道
+                // 「记录被裁剪过」。没有这两个字段的话，数据莫名变少只会让人
+                // 以为是 bug，而不是「到上限了」。
+                entries: items.length,
+                limit: MAX_STATS_ITEMS,
+                dropped: Number(stats.dropped) || 0,
                 items: items.sort((a, b) => (a.last < b.last ? 1 : -1)),
             });
         }
         if (method === 'DELETE') {
             await clearStats(env);
-            return ok({ total: 0, itemCount: 0, ipCount: 0, items: [] });
+            return ok({ total: 0, itemCount: 0, ipCount: 0, entries: 0, limit: MAX_STATS_ITEMS, dropped: 0, items: [] });
         }
     }
 
@@ -751,6 +802,54 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
 
 // ---------------------------------------------------------------- 备份结构
 
+/**
+ * 可进备份的设置子集（审计 L3）。
+ *
+ * 与 `publicSettings` 的区别在**用途**：后者是「给前端看的」，凭据字段被换成
+ * `hasApiKey` / `tokenSet` / `*Mask` 之类的标记，值全丢了 —— 拿它当备份内容，
+ * 导入时能恢复的信息量为零（这正是审计 L3 说的「导出了但从不恢复」）。
+ * 这里要的是「能原样恢复的一份子集」：不含任何凭据，但字段值是真的。
+ *
+ * 为什么不干脆把凭据也导出去：备份会落到 Gist / 网盘 / 用户下载的 JSON 里，
+ * 那等于把 AI Key、Bot Token、网盘密码复制到几个不受控的地方。所以凭据一律
+ * 不进备份，导入侧对这几个字段**保持本机现值不动**。
+ *
+ * 明确排除：
+ *   · feedSalt（轮换它会让所有已发出的 /feed、/download 链接立即失效）
+ *   · ai.apiKey / sync.gist.token / sync.webdav.pass / telegram.token
+ *   · telegram.lastPush（运行态，不是配置）
+ */
+export function exportableSettings(settings) {
+    const s = isPlainObject(settings) ? settings : {};
+    const ai = isPlainObject(s.ai) ? s.ai : {};
+    const sync = isPlainObject(s.sync) ? s.sync : {};
+    const gist = isPlainObject(sync.gist) ? sync.gist : {};
+    const dav = isPlainObject(sync.webdav) ? sync.webdav : {};
+    const tg = isPlainObject(s.telegram) ? s.telegram : {};
+    return {
+        subBackend: String(s.subBackend || ''),
+        publicBaseUrl: String(s.publicBaseUrl || ''),
+        defaultTarget: String(s.defaultTarget || ''),
+        defaultConfig: String(s.defaultConfig || ''),
+        ai: { baseUrl: String(ai.baseUrl || ''), model: String(ai.model || '') },
+        sync: {
+            provider: String(sync.provider || 'none'),
+            gist: { gistId: String(gist.gistId || '') },
+            webdav: {
+                url: String(dav.url || ''),
+                user: String(dav.user || ''),
+                dir: String(dav.dir || ''),
+            },
+        },
+        telegram: {
+            chatIds: String(tg.chatIds || ''),
+            targets: Array.isArray(tg.targets) ? tg.targets.map((t) => ({ ...t })) : [],
+            linkType: String(tg.linkType || ''),
+            autoPush: !!tg.autoPush,
+        },
+    };
+}
+
 export function exportBundle(snap) {
     return {
         app: 'SubPilot',
@@ -762,26 +861,165 @@ export function exportBundle(snap) {
         converted: snap.converted.map((c) => ({ ...c })),
         // 自定义算子模板一起带走 —— 它是用户手调的成果，丢了比丢一条订阅更烦
         templates: (snap.templates || []).map((t) => ({ ...t })),
-        // 设置不含密钥，避免备份文件变成凭据泄漏渠道
-        settings: publicSettings(snap.settings),
+        // 设置里的**非凭据**字段一起带走，导入时按字段合并（审计 L3）。
+        // 凭据（AI Key / Gist Token / 网盘密码 / Bot Token）永不进备份。
+        settings: exportableSettings(snap.settings),
     };
+}
+
+/**
+ * 按字段合并设置（审计 L3）。只认非凭据字段，凭据一律不动本机现值。
+ *
+ * `provider` 是个例外：它本身不是凭据，但切过去之后依赖对应凭据存在。
+ * 所以切完要检查本机有没有那个凭据，没有就明确警告 —— 否则用户会看到
+ * 「自动同步已开启」却一直失败，还以为是网络问题。
+ *
+ * @returns {number} 实际写入的字段数
+ */
+function mergeSettings(cur, inc, stats) {
+    if (!isPlainObject(inc)) return 0;
+    let n = 0;
+
+    for (const k of ['subBackend', 'publicBaseUrl', 'defaultConfig']) {
+        if (typeof inc[k] === 'string') {
+            cur[k] = inc[k].trim();
+            n += 1;
+        }
+    }
+    if (typeof inc.defaultTarget === 'string' && inc.defaultTarget) {
+        cur.defaultTarget = inc.defaultTarget;
+        n += 1;
+    }
+
+    if (isPlainObject(inc.ai)) {
+        for (const k of ['baseUrl', 'model']) {
+            if (typeof inc.ai[k] === 'string') {
+                cur.ai[k] = inc.ai[k].trim();
+                n += 1;
+            }
+        }
+        // apiKey 不在备份里，保持本机现值
+    }
+
+    if (isPlainObject(inc.sync)) {
+        if (isPlainObject(inc.sync.gist) && typeof inc.sync.gist.gistId === 'string') {
+            cur.sync.gist.gistId = inc.sync.gist.gistId.trim();
+            n += 1;
+        }
+        if (isPlainObject(inc.sync.webdav)) {
+            for (const k of ['url', 'user', 'dir']) {
+                if (typeof inc.sync.webdav[k] === 'string') {
+                    cur.sync.webdav[k] = inc.sync.webdav[k].trim();
+                    n += 1;
+                }
+            }
+            // pass 不在备份里，保持本机现值
+        }
+        if (['none', 'gist', 'webdav'].includes(inc.sync.provider)) {
+            cur.sync.provider = inc.sync.provider;
+            n += 1;
+            if (cur.sync.provider === 'gist' && !cur.sync.gist.token) {
+                stats.warnings.push(
+                    '备份把同步通道设为 Gist，但本机没有 Gist Token（凭据不进备份），需在同步页补填后才能备份',
+                );
+            }
+            if (cur.sync.provider === 'webdav' && !cur.sync.webdav.pass) {
+                stats.warnings.push(
+                    '备份把同步通道设为 WebDAV；若该网盘需要密码，请在同步页补填（凭据不进备份）',
+                );
+            }
+        }
+    }
+
+    if (isPlainObject(inc.telegram)) {
+        const tg = inc.telegram;
+        for (const k of ['chatIds', 'linkType']) {
+            if (typeof tg[k] === 'string') {
+                cur.telegram[k] = tg[k].trim();
+                n += 1;
+            }
+        }
+        if (typeof tg.autoPush === 'boolean') {
+            cur.telegram.autoPush = tg.autoPush;
+            n += 1;
+        }
+        if (Array.isArray(tg.targets)) {
+            // 只收合法形状：导入文件是外部输入，别让脏数据进到推送循环里
+            cur.telegram.targets = tg.targets
+                .filter(
+                    (t) =>
+                        isPlainObject(t) &&
+                        ['sub', 'col', 'file'].includes(t.kind) &&
+                        typeof t.name === 'string' &&
+                        t.name,
+                )
+                .map((t) => ({ kind: t.kind, name: t.name }));
+            n += 1;
+        }
+        // token 不在备份里，保持本机现值
+    }
+
+    return n;
 }
 
 /**
  * 合并备份：按 name 合并，**同名以云端/导入文件为准**，本站多余项保留。
  * 是合并而非覆盖 —— 覆盖会静默丢掉用户在本站新建的内容。
+ *
+ * 除了五张表，现在还合并**设置里的非凭据字段**（审计 L3）：导出侧给的是
+ * exportableSettings() 的结果，导入侧对凭据（AI Key / Gist Token / 网盘密码 /
+ * Bot Token）保持本机现值不动 —— 备份文件不该成为凭据副本。
  */
 export function mergeBundle(snap, incoming) {
-    const stats = { added: 0, updated: 0, skipped: 0, warnings: [] };
+    const stats = { added: 0, updated: 0, skipped: 0, settingsUpdated: 0, warnings: [] };
 
-    const mergeList = (target, source, fields) => {
+    /**
+     * 导入项的统一净化。
+     *
+     * 备份文件是**外部输入**：可能来自旧版本，可能是手工改过的 JSON，也可能
+     * 干脆是别人给的。而写入路径有 validateSub / validateFile / sanitizeProcess
+     * 把关，导入路径此前一个都没有（审计 L3 / M5）—— 一份坏备份能直接落库，
+     * 落进去之后每次保存都要把这份脏数据再写一遍。
+     *
+     * 这里统一处理三类问题：名称非法（会破坏 URL 路径语义）、正文超限
+     * （KV 单值 25MiB，超了就是整个快照写失败）、算子链结构不合法。
+     * 一律**跳过 + 记一条 warning**，不静默丢弃。
+     */
+    const guard = (item, kind, { maxLen = 0 } = {}) => {
+        const nameErr = validateName(item.name, { maxLen });
+        if (nameErr) {
+            stats.warnings.push(`跳过一条${kind}：${nameErr}（${String(item.name).slice(0, 40)}）`);
+            return false;
+        }
+        return true;
+    };
+
+    /** 算子链净化：结构不合法就清空（运行时 applyOperators 会跳过非法项，但别让它进库） */
+    const guardProcess = (item) => {
+        if (item.process === undefined) return true;
+        const clean = sanitizeProcess(item.process);
+        if (clean) {
+            item.process = clean;
+            return true;
+        }
+        item.process = [];
+        stats.warnings.push(`「${item.name}」的算子链结构不合法，已清空`);
+        return true;
+    };
+
+    const mergeList = (target, source, fields, prepare) => {
         for (const raw of Array.isArray(source) ? source : []) {
             if (!isPlainObject(raw) || !raw.name) {
                 stats.skipped += 1;
                 continue;
             }
             const item = pick(raw, fields);
-            const idx = target.findIndex((x) => x.name === raw.name);
+            item.name = String(raw.name).trim();
+            if (prepare && !prepare(item)) {
+                stats.skipped += 1;
+                continue;
+            }
+            const idx = target.findIndex((x) => x.name === item.name);
             if (idx < 0) {
                 target.push({ ...item, createdAt: raw.createdAt || nowIso(), updatedAt: nowIso() });
                 stats.added += 1;
@@ -792,11 +1030,60 @@ export function mergeBundle(snap, incoming) {
         }
     };
 
-    mergeList(snap.subs, incoming.subs, SUB_FIELDS);
-    mergeList(snap.collections, incoming.collections, COL_FIELDS);
-    mergeList(snap.files, incoming.files, FILE_FIELDS);
-    mergeList(snap.converted, incoming.converted, ['name', 'target', 'template', 'content', 'createdAt']);
-    mergeList(snap.templates, incoming.templates, ['name', 'desc', 'process']);
+    mergeList(snap.subs, incoming.subs, SUB_FIELDS, (item) => {
+        if (!guard(item, '订阅')) return false;
+        const size = fileBytes(item.content);
+        if (size > MAX_SUB_BYTES) {
+            stats.warnings.push(`跳过订阅「${item.name}」：正文约 ${fmtBytes(size)}，超过 8MiB 上限`);
+            return false;
+        }
+        // 与写入路径（normalizeSub）同语义：远程订阅的正文一律清空。不收敛的话，
+        // 一份把节点正文塞进远程订阅的备份会把它原样带进来 —— 白占体积，
+        // 还会让「远程订阅只备份地址，不缓存节点正文」这条说明变成假话。
+        // 赋空串而不是 delete 键：记录形状要和 normalizeSub 产出的完全一致。
+        if (item.source !== 'local') item.content = '';
+        return guardProcess(item);
+    });
+
+    mergeList(snap.collections, incoming.collections, COL_FIELDS, (item) => {
+        if (!guard(item, '组合')) return false;
+        return guardProcess(item);
+    });
+
+    mergeList(snap.files, incoming.files, FILE_FIELDS, (item) => {
+        if (!guard(item, '文件')) return false;
+        const size = fileBytes(item.content);
+        if (size > MAX_FILE_BYTES) {
+            stats.warnings.push(`跳过文件「${item.name}」：正文约 ${fmtBytes(size)}，超过 512KiB 上限`);
+            return false;
+        }
+        // 同上：远程文件不存正文（normalizeFile 的 source 缺省是 local，所以按 remote 判）
+        if (item.source === 'remote') item.content = '';
+        return true;
+    });
+
+    mergeList(
+        snap.converted,
+        incoming.converted,
+        ['name', 'target', 'template', 'content', 'createdAt'],
+        (item) => guard(item, '成品卡', { maxLen: 64 }),
+    );
+
+    // 模板的算子链**必须**合法：它是「用户手调的成果」，进来一条坏链子还不如没有
+    mergeList(snap.templates, incoming.templates, ['name', 'desc', 'process'], (item) => {
+        if (!guard(item, '模板', { maxLen: 40 })) return false;
+        const clean = sanitizeProcess(item.process);
+        if (!clean) {
+            stats.warnings.push(`模板「${item.name}」的算子链结构不合法，已跳过`);
+            return false;
+        }
+        item.process = clean;
+        item.desc = String(item.desc ?? '').trim().slice(0, 200);
+        return true;
+    });
+
+    // 设置按字段合并（审计 L3）：导出侧给的是非凭据子集，导入侧对凭据保持本机现值
+    stats.settingsUpdated = mergeSettings(snap.settings, incoming.settings, stats);
 
     // 导入的模板可能撞上内置模板名（对方版本不同、或手工改过备份文件）。
     // 留着会导致下拉里出现两个同名项，套用哪个全凭运气 —— 直接剔除并告知。
@@ -823,12 +1110,24 @@ export function mergeBundle(snap, incoming) {
 
 function normalizeSub(input, prev = {}) {
     const source = input.source === 'local' ? 'local' : 'remote';
+    const content = source === 'local' ? String(input.content ?? prev.content ?? '') : '';
+
+    // 第二道闸（审计 M5）。validateSub 是第一道，走 API 的正常路径到不了这里；
+    // 但**备份导入**以及将来新增的调用点都可能绕过它。与其静默写进一份超限正文
+    // （KV 单值 25MiB，超了就是整个快照写失败），不如在这里直接抛 —— 抛出的
+    // ApiError 会穿过 mutate 的回调，由 index.js 统一翻成 413。
+    const size = fileBytes(content);
+    if (size > MAX_SUB_BYTES) {
+        const name = String(input.name ?? prev.name ?? '').trim();
+        throw new ApiError(`订阅「${name}」正文超过 8MiB 上限（当前约 ${fmtBytes(size)}）`, 413);
+    }
+
     return {
         name: String(input.name ?? prev.name ?? '').trim(),
         displayName: String(input.displayName ?? prev.displayName ?? '').trim(),
         source,
         url: source === 'remote' ? String(input.url ?? prev.url ?? '') : '',
-        content: source === 'local' ? String(input.content ?? prev.content ?? '') : '',
+        content,
         ua: String(input.ua ?? prev.ua ?? '').trim(),
         remark: String(input.remark ?? prev.remark ?? '').trim(),
         process: Array.isArray(input.process) ? input.process : prev.process || [],
@@ -840,6 +1139,11 @@ function normalizeSub(input, prev = {}) {
 function validateSub(body) {
     const nameErr = validateName(body?.name);
     if (nameErr) return nameErr;
+    // 体积上限（审计 M5）。与文件 / 成品同口径用**字节数**，不用 String.length。
+    const size = fileBytes(body?.content);
+    if (size > MAX_SUB_BYTES) {
+        return `订阅正文超过 8MiB 上限（当前约 ${fmtBytes(size)}）`;
+    }
     if (body?.source === 'local') {
         if (!String(body.content || '').trim()) return '本地订阅需要填写节点内容';
     } else if (!String(body?.url || '').trim()) {

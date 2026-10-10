@@ -9,6 +9,7 @@
 
 import { parseNodes, serializeNodes, summarize, renameNode } from './nodes.js';
 import { applyOperators } from './operators.js';
+import { safeFetch, ssrfOptions } from './netguard.js';
 
 const FETCH_TIMEOUT = 15000;
 
@@ -39,22 +40,36 @@ export function stripRefPrefix(raw) {
     return null;
 }
 
-/** 抓远程订阅正文。失败抛错，由调用方决定是整体失败还是跳过该源。 */
-export async function fetchSubText(url, ua = '') {
+/**
+ * 抓远程订阅正文。失败抛错，由调用方决定是整体失败还是跳过该源。
+ *
+ * 这是全站**唯一**拉取用户提供 URL 的出口（`/sub`、`/feed`、`/download`、
+ * `/api/preview/*` 都经由它），所以 SSRF 守卫就挂在这里，不必在每个调用点重复
+ * （审计 M2）。守卫做三件事：协议/主机名/字面私网 IP 检查、可选的域名解析复核、
+ * 以及**自己逐跳跟随重定向**（`redirect: 'follow'` 看不到第二跳落到哪里）。
+ */
+export async function fetchSubText(url, ua = '', env = null) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
     try {
-        const res = await fetch(url, {
-            headers: {
-                'User-Agent': ua || 'clash-verge/v2.0 SubPilot/0.1',
-                Accept: '*/*',
+        const res = await safeFetch(
+            url,
+            {
+                headers: {
+                    'User-Agent': ua || 'clash-verge/v2.0 SubPilot/0.1',
+                    Accept: '*/*',
+                },
+                signal: ctrl.signal,
             },
-            signal: ctrl.signal,
-            redirect: 'follow',
-        });
+            // 订阅地址允许 http://（不少人把订阅放在明文 http 上），
+            // 但内网 / 环回 / 元数据地址一律挡住。
+            ssrfOptions(env, { allowHttp: true, label: '订阅地址' }),
+        );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.text();
     } catch (e) {
+        // 被守卫拦下的错误已经是一条给用户看的完整说明，别再套一层「拉取订阅失败」
+        if (e?.code === 'SSRF_BLOCKED') throw e;
         const msg = e.name === 'AbortError' ? '请求超时' : e.message || String(e);
         throw new Error(`拉取订阅失败（${msg}）`);
     } finally {
@@ -72,7 +87,7 @@ export async function fetchSubText(url, ua = '') {
  *
  * 注：只在本文件内使用（runPipeline），因此不对外导出。
  */
-async function resolveSource(snap, ref, uaOverride = '') {
+async function resolveSource(snap, ref, uaOverride = '', env = null) {
     const raw = String(ref || '').trim();
     if (!raw) return null;
 
@@ -91,7 +106,7 @@ async function resolveSource(snap, ref, uaOverride = '') {
         }
     }
 
-    const text = await fetchSubText(raw, uaOverride);
+    const text = await fetchSubText(raw, uaOverride, env);
     return { kind: 'url', name: raw, text, ua: uaOverride };
 }
 
@@ -108,11 +123,11 @@ function sourceFromSub(sub, uaOverride) {
 }
 
 /** 取一段来源的实际正文（远程的可能有多个 URL，逐个抓后拼接） */
-async function materialize(src) {
+async function materialize(src, env = null) {
     if (src.kind === 'local') return src.text;
     if (src.text) return src.text;
     const chunks = [];
-    for (const u of src.urls) chunks.push(await fetchSubText(u, src.ua));
+    for (const u of src.urls) chunks.push(await fetchSubText(u, src.ua, env));
     return chunks.join('\n');
 }
 
@@ -130,9 +145,9 @@ export async function runPipeline(env, snap, { sources = [], process = [] } = {}
     let format = '';
 
     for (const item of sources) {
-        const src = await resolveSource(snap, item.ref, item.ua);
+        const src = await resolveSource(snap, item.ref, item.ua, env);
         if (!src) continue;
-        const text = await materialize(src);
+        const text = await materialize(src, env);
         const parsed = parseNodes(text);
         if (parsed.error) {
             log.push(`来源「${src.name}」：${parsed.error}`);

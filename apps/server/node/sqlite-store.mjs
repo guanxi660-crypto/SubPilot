@@ -31,6 +31,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { ConflictError } from '../src/storage.js';
 
 /**
  * 各集合的落表配置。
@@ -46,7 +47,15 @@ const TABLES = [
     { key: 'shares', table: 'shares', id: 'code' },
 ];
 
-const SCHEMA_VERSION = 1;
+// v1 → v2：meta 增加 rev 列（快照写次数，用于跨进程写冲突检测，见 storage.js 的
+// ConflictError）。旧库在 openDatabase 里按列存在性补 ALTER，不会丢数据。
+const SCHEMA_VERSION = 2;
+
+/**
+ * stats 表里存放「items 之外顶层字段」的保留行 id。
+ * 用一个含 NUL 的串：正常的统计 key 是 `类型|项目|IP`，不可能撞上它。
+ */
+const STATS_EXTRA_ROW = '\u0000stats-extra';
 
 function openDatabase(file) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
@@ -69,7 +78,8 @@ function openDatabase(file) {
             app        TEXT NOT NULL,
             version    INTEGER NOT NULL,
             updated_at TEXT NOT NULL,
-            settings   TEXT NOT NULL
+            settings   TEXT NOT NULL,
+            rev        INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS order_index (
             collection TEXT NOT NULL PRIMARY KEY,
@@ -91,7 +101,12 @@ function openDatabase(file) {
 
     const current = db.prepare('PRAGMA user_version').get().user_version;
     if (current !== SCHEMA_VERSION) {
-        // 目前只有 v1，没有历史数据要迁移。将来加字段时在这里按版本补 ALTER。
+        // v1 的库没有 meta.rev。新建库在上面 CREATE TABLE 里已经带上了这一列，
+        // 所以 ALTER 必须先探列、不能无脑执行（否则 "duplicate column name"）。
+        const cols = db.prepare('PRAGMA table_info(meta)').all().map((c) => c.name);
+        if (!cols.includes('rev')) {
+            db.exec('ALTER TABLE meta ADD COLUMN rev INTEGER NOT NULL DEFAULT 0');
+        }
         db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     }
     return db;
@@ -120,6 +135,9 @@ export function createSqliteStore(file) {
     let orderCache = null;
     let statsCache = null;
     let statsRowCache = null;
+    // stats 表里 items 之外的顶层字段（目前只有 dropped —— 统计轮转淘汰了多少条）
+    // 存成一行保留记录。之前只认 items，dropped 写进去就读不回来，接口永远报 0。
+    let statsExtraJson = null;
 
     function hydrate() {
         if (rowCache) return;
@@ -170,10 +188,13 @@ export function createSqliteStore(file) {
             rowCache[key] = byId;
         }
 
-        const meta = stmt('SELECT app, version, updated_at, settings FROM meta WHERE id = 1').get();
+        const meta = stmt('SELECT app, version, rev, updated_at, settings FROM meta WHERE id = 1').get();
         if (meta) {
             snapshotCache.app = meta.app;
             snapshotCache.version = meta.version;
+            // rev 必须从库里读回来（不能默认 0）：它是写冲突检测的基线，
+            // 重启后归零会让「重启后的第一次写」永远认为自己在旧基线上
+            snapshotCache.rev = Number(meta.rev) || 0;
             snapshotCache.updatedAt = meta.updated_at;
             snapshotCache.settings = JSON.parse(meta.settings);
         }
@@ -183,11 +204,22 @@ export function createSqliteStore(file) {
         if (statsRowCache) return;
         statsRowCache = new Map();
         const items = {};
+        let extra = {};
         for (const r of stmt('SELECT id, data FROM stats').all()) {
+            if (r.id === STATS_EXTRA_ROW) {
+                try {
+                    const parsed = JSON.parse(r.data);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) extra = parsed;
+                } catch {
+                    /* 这一行坏了不该让统计整体不可用，当没有 */
+                }
+                continue;
+            }
             statsRowCache.set(r.id, r.data);
             items[r.id] = JSON.parse(r.data);
         }
-        statsCache = { items };
+        statsExtraJson = JSON.stringify(extra);
+        statsCache = { ...extra, items };
     }
 
     /**
@@ -243,7 +275,15 @@ export function createSqliteStore(file) {
             return structuredClone(snapshotCache);
         },
 
-        async writeSnapshot(snap) {
+        /**
+         * @param {{ expectedRev?: number }} [opts]
+         *   expectedRev 存在时做一次**乐观锁**校验（审计 L6）：调用方读到快照时
+         *   的 rev 必须与库里当前 rev 一致，否则说明期间有别的写入落库了 ——
+         *   本次这份快照是基于旧基线算的，写下去会把那次修改整个盖掉，直接抛
+         *   ConflictError 让 mutate 重读重放。
+         *   不传则跳过校验（备份脚本、测试里的直接写入用得上）。
+         */
+        async writeSnapshot(snap, { expectedRev } = {}) {
             hydrate();
             const plans = TABLES.map(({ key, table, id }) => ({
                 key,
@@ -257,6 +297,17 @@ export function createSqliteStore(file) {
             }));
 
             tx(() => {
+                if (expectedRev !== undefined) {
+                    // 在 BEGIN IMMEDIATE 事务内比对：拿到写锁之后读到的 rev 才是
+                    // 权威值，事务外的先读后比会有同样长度的竞态窗口。
+                    const row = stmt('SELECT rev FROM meta WHERE id = 1').get();
+                    const currentRev = row ? Number(row.rev) || 0 : 0;
+                    if (currentRev !== Number(expectedRev)) {
+                        throw new ConflictError(
+                            `快照已被其他写入更新（期望 rev=${expectedRev}，实际 rev=${currentRev}）`,
+                        );
+                    }
+                }
                 for (const { key, table, plan } of plans) {
                     for (const [id, json] of plan.upserts) {
                         stmt(
@@ -274,15 +325,18 @@ export function createSqliteStore(file) {
                 }
 
                 stmt(
-                    `INSERT INTO meta (id, app, version, updated_at, settings) VALUES (1, ?, ?, ?, ?)
+                    `INSERT INTO meta (id, app, version, updated_at, settings, rev)
+                     VALUES (1, ?, ?, ?, ?, ?)
                      ON CONFLICT(id) DO UPDATE SET
                         app = excluded.app, version = excluded.version,
-                        updated_at = excluded.updated_at, settings = excluded.settings`,
+                        updated_at = excluded.updated_at, settings = excluded.settings,
+                        rev = excluded.rev`,
                 ).run(
                     String(snap.app || 'SubPilot'),
                     Number(snap.version) || 1,
                     String(snap.updatedAt || ''),
                     JSON.stringify(snap.settings ?? {}),
+                    Number(snap.rev) || 0,
                 );
             });
 
@@ -302,16 +356,23 @@ export function createSqliteStore(file) {
 
         async writeStats(stats) {
             hydrateStats();
-            const items = stats && typeof stats === 'object' && stats.items ? stats.items : {};
+            const src = stats && typeof stats === 'object' ? stats : {};
+            const items = src.items && typeof src.items === 'object' ? src.items : {};
             const next = new Map();
             for (const [k, v] of Object.entries(items)) next.set(k, JSON.stringify(v));
+
+            // items 之外的顶层字段一起落库（dropped 这类累计量）
+            const extra = {};
+            for (const [k, v] of Object.entries(src)) if (k !== 'items') extra[k] = v;
+            const extraJson = JSON.stringify(extra);
+            const extraChanged = statsExtraJson !== extraJson;
 
             const upserts = [];
             for (const [k, json] of next) if (statsRowCache.get(k) !== json) upserts.push([k, json]);
             const deletes = [];
             for (const k of statsRowCache.keys()) if (!next.has(k)) deletes.push(k);
 
-            if (upserts.length || deletes.length) {
+            if (upserts.length || deletes.length || extraChanged) {
                 tx(() => {
                     for (const [k, json] of upserts) {
                         stmt(
@@ -320,10 +381,17 @@ export function createSqliteStore(file) {
                         ).run(k, json);
                     }
                     for (const k of deletes) stmt('DELETE FROM stats WHERE id = ?').run(k);
+                    if (extraChanged) {
+                        stmt(
+                            `INSERT INTO stats (id, data) VALUES (?, ?)
+                             ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
+                        ).run(STATS_EXTRA_ROW, extraJson);
+                    }
                 });
             }
             statsRowCache = next;
-            statsCache = structuredClone({ items });
+            statsExtraJson = extraJson;
+            statsCache = structuredClone({ ...extra, items });
         },
 
         /** 让 WAL 落回主库文件。备份前调用，避免只拷到主库而丢掉最近的写入。 */

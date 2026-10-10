@@ -89,6 +89,10 @@ export function defaultSnapshot() {
     return {
         app: 'SubPilot',
         version: 1,
+        // 写次数计数器（审计 L6）。每次 saveSnapshot 自增，用来在排查「改动丢了」
+        // 时有据可查：前端 / 日志比对 rev 就能判断两次写是否落在同一份基线上。
+        // KV 下它随整个快照一起持久化；SQLite 下存在 meta 行里（见 sqlite-store.mjs）。
+        rev: 0,
         subs: [],
         collections: [],
         files: [],
@@ -113,21 +117,80 @@ export async function loadSnapshot(env) {
     }
 }
 
-export async function saveSnapshot(env, snap) {
+/**
+ * 写入冲突（审计 L6）。
+ *
+ * 由**驱动**在写事务内部抛出：读到的版本号与库里当前版本不一致，说明本次
+ * 「读 → 改」期间已经有别的写入落库了 —— 继续写下去就会把那次修改整个盖掉。
+ * 抛出来让 mutate 重放一次，比静默 last-write-wins 强得多。
+ *
+ * KV 驱动没有 CAS 能力，永远不会抛这个（跨 isolate 的一致性只能靠 Durable
+ * Object 解决）；SQLite 驱动在 BEGIN IMMEDIATE 事务内比对 meta.rev。
+ */
+export class ConflictError extends Error {
+    constructor(message = '数据在本次操作期间被其他写入修改，请重试') {
+        super(message);
+        this.name = 'ConflictError';
+        this.status = 409;
+        this.expose = true;
+    }
+}
+
+export async function saveSnapshot(env, snap, { expectedRev } = {}) {
     snap.updatedAt = nowIso();
-    await driverOf(env).writeSnapshot(snap);
+    snap.rev = (Number(snap.rev) || 0) + 1;
+    await driverOf(env).writeSnapshot(snap, { expectedRev });
     return snap;
 }
 
 /**
+ * mutate 的**进程内串行化闸门**（审计 L6）。
+ *
+ * 为什么必须有：`mutate()` 是「读整份快照 → 回调修改 → 写回整份」，本身没有
+ * CAS。同一进程里两个写操作撞上时（典型组合：用户点「保存成品」的同时，
+ * Telegram 即时推送正在写 `lastPush`），后写的那份快照是基于**旧**数据算出来的，
+ * 会把先写的那次修改整个盖掉 —— 而且不报错，用户只会觉得「刚才那次没保存上」。
+ *
+ * 串行化之后，「读-改-写」在同一进程内变成原子的。跨进程 / 跨 isolate 的并发
+ * （Workers 多 colo、多容器共享一个库）依然无法根治 —— 那需要 Durable Object
+ * 或数据库级 CAS；这条链解决的是**实际会撞上**的那部分，成本却只有一行 Promise。
+ *
+ * ⚠️ 回调里**不能**再调用 `mutate()`，否则会在同一条链上自我等待、永久挂起。
+ * 目前所有调用点（api / sync / telegram / templates）都是单层的，没有嵌套。
+ */
+let mutateChain = Promise.resolve();
+
+/** 写冲突时重放几次。一次就够：串行化之后同进程不会互撞，剩下的是跨进程。 */
+const MAX_WRITE_RETRY = 1;
+
+/**
  * 读 → 改 → 写。fn 收到快照，可直接原地修改，也可返回一个值作为 result。
  * 返回 { snap, result }。
+ *
+ * 回调**只依赖传进来的 snap**，因此写冲突时可以安全重放：重新读一份最新快照
+ * 再跑一遍，语义等价于「这次操作发生在更晚的时间点」。
  */
 export async function mutate(env, fn) {
-    const snap = await loadSnapshot(env);
-    const result = await fn(snap);
-    await saveSnapshot(env, snap);
-    return { snap, result };
+    const run = async () => {
+        for (let attempt = 0; ; attempt++) {
+            const snap = await loadSnapshot(env);
+            const baseRev = Number(snap.rev) || 0;
+            const result = await fn(snap);
+            try {
+                await saveSnapshot(env, snap, { expectedRev: baseRev });
+                return { snap, result };
+            } catch (e) {
+                if (e?.name !== 'ConflictError' || attempt >= MAX_WRITE_RETRY) throw e;
+            }
+        }
+    };
+    // 前一步失败也要继续排下一步，否则一次失败会把整条链永久卡死
+    const next = mutateChain.then(run, run);
+    mutateChain = next.then(
+        () => {},
+        () => {},
+    );
+    return next;
 }
 
 function normalizeSnapshot(raw) {
@@ -136,6 +199,8 @@ function normalizeSnapshot(raw) {
     for (const k of ['subs', 'collections', 'files', 'converted', 'shares', 'templates']) {
         if (!Array.isArray(out[k])) out[k] = [];
     }
+    // 老快照里没有 rev；被手工改过的备份里可能是字符串 / NaN —— 一律收敛成有限数
+    out.rev = Number.isFinite(Number(out.rev)) ? Number(out.rev) : 0;
     out.settings = { ...defaultSettings(), ...(isPlainObject(raw.settings) ? raw.settings : {}) };
     out.settings.ai = { ...defaultSettings().ai, ...(raw.settings?.ai || {}) };
     out.settings.sync = { ...defaultSettings().sync, ...(raw.settings?.sync || {}) };
@@ -156,6 +221,18 @@ function normalizeSnapshot(raw) {
 }
 
 // ---- 拉取统计 ----
+
+/**
+ * 统计条目上限（审计 M5）。
+ *
+ * key 是 `类型|项目|IP` —— 每个拉取过订阅的客户端 IP 都会留下一条**永久**记录，
+ * 只有手工 `DELETE /api/stats` 才清。Cloudflare KV 单个 value 上限 25MiB，
+ * 逼近之后 `writeStats` 抛错、此前又被 `waitUntil(...).catch(() => {})` 静默吞掉，
+ * 用户看到的现象是「统计数字不涨了」而不是任何报错，排查时完全无从下手。
+ */
+export const MAX_STATS_ITEMS = 5000;
+/** 触发淘汰后一次降到这个水位：避免每条新记录都跑一次全量排序（摊销到 ~500 次一条） */
+const STATS_LOW_WATER = 4500;
 
 export async function loadStats(env) {
     try {
@@ -192,7 +269,29 @@ export async function recordPull(env, { type, item, ip }) {
         cur.count += 1;
         cur.last = nowIso();
         stats.items[key] = cur;
-        await driverOf(env).writeStats(stats);
+
+        // 条目上限与轮转（审计 M5）。按 `last` 淘汰最旧的一批；`last` 是 ISO 串，
+        // 字典序即时间序，不用解析成 Date。淘汰数量累计到 stats.dropped，
+        // 让「记录被裁剪过」在概览页上可见 —— 静默丢数据比丢数据更糟。
+        const keys = Object.keys(stats.items);
+        if (keys.length > MAX_STATS_ITEMS) {
+            const oldestFirst = keys
+                .map((k) => [k, String(stats.items[k]?.last || '')])
+                .sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+            const dropCount = keys.length - STATS_LOW_WATER;
+            for (let i = 0; i < dropCount; i++) delete stats.items[oldestFirst[i][0]];
+            stats.dropped = (Number(stats.dropped) || 0) + dropCount;
+        }
+
+        try {
+            await driverOf(env).writeStats(stats);
+        } catch (e) {
+            // 这里原来是彻底静默的：写失败连一条日志都没有，问题只表现为
+            // 「统计数字不动了」（审计 M5）。记一条 warn 再抛，让上层原有的
+            // .catch(() => {}) 继续兜住 —— 统计失败绝不能影响分发本身。
+            console.warn(`[stats] 写入失败，本次计数已丢弃：${e?.message || e}`);
+            throw e;
+        }
         return cur;
     };
     // 前一步失败也要继续排下一步，否则一次失败会把整条链永久卡死

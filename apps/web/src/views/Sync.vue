@@ -322,6 +322,10 @@
                 <span class="px-2 py-1 rounded-lg bg-panel2 border border-line">新增 {{ report.added }}</span>
                 <span class="px-2 py-1 rounded-lg bg-panel2 border border-line">更新 {{ report.updated }}</span>
                 <span class="px-2 py-1 rounded-lg bg-panel2 border border-line">跳过 {{ report.skipped }}</span>
+                <span
+                    v-if="report.settingsUpdated"
+                    class="px-2 py-1 rounded-lg bg-panel2 border border-line"
+                >设置 {{ report.settingsUpdated }} 项</span>
             </div>
             <div v-if="report.warnings?.length" class="mt-3 text-[11px] text-amber-300/90 space-y-1">
                 <div v-for="(w, i) in report.warnings" :key="i">⚠ {{ w }}</div>
@@ -336,13 +340,18 @@
             <div class="text-sm font-semibold">备份里有什么</div>
             <ul class="text-[11px] text-slate-500 mt-3 space-y-1.5 list-disc list-inside leading-relaxed">
                 <li>订阅（含 JSON 脚本链）、组合、文件正文、转换后成品快照</li>
-                <li><span class="text-amber-300/90">不包含</span>访问令牌、AI Key、同步密码等凭据 —— 避免备份文件变成凭据泄漏渠道</li>
+                <li>自定义算子模板</li>
+                <li>
+                    <span class="text-sky-300/90">设置</span>（转换后端地址、公开地址、默认目标格式与外部配置、
+                    AI Base URL / 模型、TG 推送目标与自动推送开关）
+                </li>
+                <li><span class="text-amber-300/90">不包含</span>访问令牌、AI Key、Gist Token、网盘密码、TG Bot Token 等凭据 —— 避免备份文件变成凭据泄漏渠道</li>
                 <li>远程订阅只备份地址，不缓存节点正文（缓存会把过期节点带回来）</li>
                 <li>单包上限 20MiB</li>
             </ul>
             <div class="text-[11px] text-slate-600 mt-3 leading-relaxed">
-                由于凭据不进备份，在另一站点恢复后需要重新填写 AI Key、Gist Token、网盘密码；
-                数据本身（订阅 / 组合 / 文件 / 成品）会完整还原。
+                恢复后只需要补填凭据（AI Key / Gist Token / 网盘密码 / Bot Token）；
+                数据与设置会按名称 / 字段合并还原 —— 恢复是<strong>合并</strong>，不会删掉本站已有的内容。
             </div>
         </div>
     </div>

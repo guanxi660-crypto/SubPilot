@@ -10,6 +10,7 @@
 import { fail, ok, isPlainObject, maskSecret } from './util.js';
 import { loadSnapshot, mutate } from './storage.js';
 import { exportBundle, mergeBundle } from './api.js';
+import { checkUrl, safeFetch, ssrfOptions } from './netguard.js';
 
 const BACKUP_FILE = 'subpilotx-backup.json';
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
@@ -22,9 +23,15 @@ const SYNC_TIMEOUT = 20000;
  * 都会把这次请求一直吊着 —— 用户在页面上只看到转圈，没有任何反馈。
  * 其余模块（pipeline / sce / telegram）都带超时，这里此前是漏的。
  */
-async function fetchWithTimeout(url, init = {}, timeoutMs = SYNC_TIMEOUT) {
+async function fetchWithTimeout(url, init = {}, timeoutMs = SYNC_TIMEOUT, ssrf = {}) {
     try {
-        return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+        // safeFetch 会逐跳校验重定向目标 —— 同步目标返回 302 指向内网地址时
+        // 不会被悄悄跟随（审计 M2）。
+        return await safeFetch(
+            url,
+            { ...init, signal: AbortSignal.timeout(timeoutMs) },
+            { label: '同步地址', ...ssrf },
+        );
     } catch (e) {
         if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
             throw new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒）`);
@@ -35,54 +42,22 @@ async function fetchWithTimeout(url, init = {}, timeoutMs = SYNC_TIMEOUT) {
 
 // ---------------------------------------------------------------- SSRF 防护
 
-const BLOCKED_HOSTS = [
-    'localhost', 'metadata.google.internal', 'metadata.goog',
-    '169.254.169.254', '100.100.100.200', 'fd00:ec2::254',
-];
-
-function isPrivateIp(host) {
-    const h = host.toLowerCase().replace(/^\[|\]$/g, '');
-    // IPv4
-    const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (m) {
-        const [a, b] = [Number(m[1]), Number(m[2])];
-        if (a === 10) return true;
-        if (a === 127) return true;
-        if (a === 0) return true;
-        if (a === 169 && b === 254) return true;
-        if (a === 172 && b >= 16 && b <= 31) return true;
-        if (a === 192 && b === 168) return true;
-        if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-        return false;
-    }
-    // IPv6 环回 / 链路本地 / 唯一本地
-    if (h === '::1' || h === '::') return true;
-    if (/^f[cd][0-9a-f]{2}:/i.test(h)) return true;
-    if (/^fe80:/i.test(h)) return true;
-    return false;
-}
+// 具体实现在 netguard.js —— 那里是全站统一的出网守卫，WebDAV 只是它的一个
+// 调用方（审计 M2：此前这份实现只服务于 WebDAV，而 /sub、/api/preview/* 等
+// 同样会拉取用户提供的地址，却完全没有校验）。
 
 /**
- * 校验同步目标地址。
- * 只允许 https（WebDAV 走明文等于把应用密码交给中间人）。
+ * WebDAV 的守卫选项。
+ *
+ * 默认**只允许 https**：WebDAV 走明文等于把应用密码交给中间人。
+ * 但内网自建网盘（NAS）基本都是明文 http —— 所以开了逃生开关
+ * （SUBPILOT_ALLOW_PRIVATE_FETCH=1）时一并放行 http，否则那个开关对内网
+ * WebDAV 等于没用。
  */
-export function assertSafeUrl(raw) {
-    let u;
-    try {
-        u = new URL(String(raw || ''));
-    } catch {
-        return '地址格式不正确';
-    }
-    if (u.protocol !== 'https:') return '地址必须以 https:// 开头';
-    const host = u.hostname.toLowerCase();
-    if (BLOCKED_HOSTS.includes(host)) return '不允许访问该主机';
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(':')) {
-        if (isPrivateIp(host)) return '不允许访问内网或环回地址';
-    }
-    if (host.endsWith('.internal') || host.endsWith('.local') || host.endsWith('.localhost')) {
-        return '不允许访问内网域名';
-    }
-    return '';
+function webdavGuard(env) {
+    const o = ssrfOptions(env, { label: 'WebDAV 地址' });
+    o.allowHttp = o.allowPrivate;
+    return o;
 }
 
 // ---------------------------------------------------------------- Gist
@@ -199,14 +174,16 @@ async function davTest(env) {
     const snap = await loadSnapshot(env);
     const cfg = snap.settings.sync.webdav;
     if (!cfg.url) return fail('请先填写 WebDAV 地址', 400);
-    const bad = assertSafeUrl(cfg.url);
+    const bad = await checkUrl(cfg.url, webdavGuard(env));
     if (bad) return fail(bad, 400);
     try {
         // PROPFIND 深度 0：能返回 207 就说明认证与路径都对
-        const res = await fetchWithTimeout(davUrl(cfg), {
-            method: 'PROPFIND',
-            headers: { ...davHeaders(cfg), Depth: '0' },
-        });
+        const res = await fetchWithTimeout(
+            davUrl(cfg),
+            { method: 'PROPFIND', headers: { ...davHeaders(cfg), Depth: '0' } },
+            SYNC_TIMEOUT,
+            webdavGuard(env),
+        );
         if (res.status === 401 || res.status === 403) return fail('认证失败，请检查账号与应用密码', 400);
         if (res.status >= 400 && res.status !== 404) {
             return fail(`WebDAV 返回 HTTP ${res.status}`, 502);
@@ -221,7 +198,7 @@ async function davBackup(env) {
     const snap = await loadSnapshot(env);
     const cfg = snap.settings.sync.webdav;
     if (!cfg.url) return fail('请先填写 WebDAV 地址', 400);
-    const bad = assertSafeUrl(cfg.url);
+    const bad = await checkUrl(cfg.url, webdavGuard(env));
     if (bad) return fail(bad, 400);
 
     const payload = JSON.stringify(exportBundle(snap), null, 0);
@@ -230,13 +207,23 @@ async function davBackup(env) {
     try {
         // 目录可能不存在，MKCOL 失败（405/409 已存在）无所谓，继续 PUT
         if (cfg.dir) {
-            await fetchWithTimeout(davUrl(cfg), { method: 'MKCOL', headers: davHeaders(cfg) }).catch(() => {});
+            await fetchWithTimeout(
+                davUrl(cfg),
+                { method: 'MKCOL', headers: davHeaders(cfg) },
+                SYNC_TIMEOUT,
+                webdavGuard(env),
+            ).catch(() => {});
         }
-        const res = await fetchWithTimeout(`${davUrl(cfg)}/${BACKUP_FILE}`, {
-            method: 'PUT',
-            headers: { ...davHeaders(cfg), 'Content-Type': 'application/json' },
-            body: payload,
-        });
+        const res = await fetchWithTimeout(
+            `${davUrl(cfg)}/${BACKUP_FILE}`,
+            {
+                method: 'PUT',
+                headers: { ...davHeaders(cfg), 'Content-Type': 'application/json' },
+                body: payload,
+            },
+            SYNC_TIMEOUT,
+            webdavGuard(env),
+        );
         if (!res.ok) {
             const t = await res.text().catch(() => '');
             return fail(`上传失败 HTTP ${res.status}：${t.slice(0, 200)}`, 502);
@@ -251,10 +238,15 @@ async function davRestore(env) {
     const snap = await loadSnapshot(env);
     const cfg = snap.settings.sync.webdav;
     if (!cfg.url) return fail('请先填写 WebDAV 地址', 400);
-    const bad = assertSafeUrl(cfg.url);
+    const bad = await checkUrl(cfg.url, webdavGuard(env));
     if (bad) return fail(bad, 400);
     try {
-        const res = await fetchWithTimeout(`${davUrl(cfg)}/${BACKUP_FILE}`, { headers: davHeaders(cfg) });
+        const res = await fetchWithTimeout(
+            `${davUrl(cfg)}/${BACKUP_FILE}`,
+            { headers: davHeaders(cfg) },
+            SYNC_TIMEOUT,
+            webdavGuard(env),
+        );
         if (res.status === 404) return fail('云端没有找到备份文件', 404);
         if (!res.ok) return fail(`下载失败 HTTP ${res.status}`, 502);
         const raw = await res.text();

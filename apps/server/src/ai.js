@@ -11,6 +11,7 @@
 import { fail, ok, isPlainObject } from './util.js';
 import { loadSnapshot } from './storage.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
+import { checkUrl, ssrfOptions } from './netguard.js';
 
 const DEFAULT_TIMEOUT = 90000;
 
@@ -21,6 +22,20 @@ function aiConfig(settings, override = {}) {
         model: String(override.model || ai.model || '').trim(),
         apiKey: String(override.apiKey || ai.apiKey || '').trim(),
     };
+}
+
+/**
+ * 只校验「请求体覆盖」的那条 baseUrl（审计 L5）。
+ *
+ * 为什么不对已保存的 baseUrl 一并校验：自建部署常把大模型跑在内网，一刀切会
+ * 直接把这类用法打死。已保存配置是管理员通过带令牌的设置接口写的，属于可信输入；
+ * 而请求体覆盖是**每次调用**都能指定的出网目标，才是需要拦的那条。
+ * 内网地址确实要覆盖时，开 SUBPILOT_ALLOW_PRIVATE_FETCH=1。
+ */
+async function checkAiOverride(env, body, effectiveBaseUrl) {
+    const override = String(body?.baseUrl || '').trim();
+    if (!override) return '';
+    return await checkUrl(effectiveBaseUrl, ssrfOptions(env, { allowHttp: true, label: 'AI Base URL' }));
 }
 
 export function buildSystemPrompt({
@@ -471,6 +486,10 @@ export async function handleAiModels(request, env) {
     }
     const cfg = aiConfig(snap.settings, body);
     if (!cfg.baseUrl) return fail('请先填写 AI Base URL', 400);
+    // 请求体里的 baseUrl 会**覆盖**服务端已保存的配置，等于让调用方指定出网目标
+    // （审计 L5）。已保存的配置视为管理员可信输入，只对「本次覆盖」做 SSRF 校验。
+    const overrideBad = await checkAiOverride(env, body, cfg.baseUrl);
+    if (overrideBad) return fail(overrideBad, 400);
     try {
         const res = await fetch(`${cfg.baseUrl}/models`, {
             headers: { Authorization: `Bearer ${cfg.apiKey}` },
@@ -499,6 +518,8 @@ export async function handleAiTest(request, env) {
     // 用户明明填了 Base URL 也被点名，误以为没填上。
     if (!cfg.baseUrl) return fail('请先填写 AI Base URL', 400);
     if (!cfg.model) return fail('请先填写模型名（可点「拉取」从接口选）', 400);
+    const overrideBad = await checkAiOverride(env, body, cfg.baseUrl);
+    if (overrideBad) return fail(overrideBad, 400);
     const started = Date.now();
     try {
         const res = await fetch(`${cfg.baseUrl}/chat/completions`, {

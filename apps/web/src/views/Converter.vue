@@ -222,10 +222,21 @@
                     {{ result.status }}
                 </span>
                 <div class="ml-auto flex gap-2">
-                    <button class="btn-ghost !py-1 text-xs" :disabled="!result.body" @click="copyResultLink">⧉ 复制链接</button>
+                    <button class="btn-ghost !py-1 text-xs" :disabled="!canCopyLink" @click="copyResultLink">⧉ 复制链接</button>
                     <button class="btn-ghost !py-1 text-xs" :disabled="!result.body" @click="downloadBody">⤓ 下载</button>
                     <button class="btn-ghost !py-1 text-xs" :disabled="!result.body" @click="openSave">保存成品</button>
                 </div>
+            </div>
+
+            <!-- 成品链接：这次转换**实际打到的那条后端地址**，原样保留后端的参数格式
+                 （<转换后端>/sub?target=…&url=…&config=…）。后端是哪台就用哪台 ——
+                 部署默认的或设置里自定义的那台，不重写成 SubPilot 自己的形态。
+                 点「转换」后才有（它只依赖参数，所以转换失败时也照样给）。 -->
+            <div v-if="result.backendUrl" class="mt-3 bg-panel2 rounded-xl p-3">
+                <div class="text-[11px] text-accent2">
+                    成品链接（转换后端格式 · {{ result.backendHost || '未配置后端' }}）
+                </div>
+                <div class="text-xs font-mono break-all mt-1.5">{{ result.backendUrl }}</div>
             </div>
 
             <div v-if="shareLink" class="mt-3 bg-panel2 rounded-xl p-3">
@@ -382,11 +393,25 @@ const form = reactive({
 // 参数区默认折叠：绝大多数转换只用默认值，摊开会把输入源挤下去
 const showParams = ref(false);
 
-const result = reactive({ ok: false, status: '', body: '' });
+const result = reactive({
+    ok: false,
+    status: '',
+    body: '',
+    /** 成品链接：这次转换实际打到的后端地址（后端格式，见 copyResultLink） */
+    backendUrl: '',
+    /** 上面那条链接的后端基地址（显示用，让人一眼看出用的是哪台后端） */
+    backendHost: '',
+});
 const save = reactive({ open: false, name: '', busy: false });
 /** 可外发的分发链接（带派生只读密钥，不含管理令牌） */
 const shareLink = ref('');
 const feedUrl = ref('');
+
+/**
+ * 「复制链接」按钮的可用性：至少要跑过一次转换。
+ * 不看 result.body —— 转换失败时后端链接照样有用（排障就靠它）。
+ */
+const canCopyLink = computed(() => !!(result.backendUrl || result.body));
 
 // 已保存的成品列表 —— 保存动作必须能在这页看到结果，而不是只在概览里默默出现
 const cards = reactive({ items: [], loading: false, downloading: '', deleting: '' });
@@ -716,8 +741,23 @@ async function run() {
     result.status = '转换中…';
     result.ok = false;
     result.body = '';
+    result.backendUrl = '';
+    result.backendHost = '';
+    const qs = buildParams();
+
+    // 成品链接与转换**并行**取：它只依赖参数、不依赖转换结果。
+    // 而且转换失败时更需要它 —— 拿去浏览器里直接打一次后端，就能把
+    // 「SubPilot 传错了参数」和「后端自己拉不到源」分开（这正是排障最费时的一步）。
+    const linkTask = api(`/api/convert-link?${qs.toString()}`)
+        .then((r) => {
+            result.backendUrl = r.data?.url || '';
+            result.backendHost = r.data?.backend || '';
+        })
+        .catch(() => {
+            /* 拿不到就不显示那一块，不打扰主流程 */
+        });
+
     try {
-        const qs = buildParams();
         const res = await fetch(`/sub?${qs.toString()}`);
         const body = await res.text();
         result.body = body;
@@ -736,16 +776,27 @@ async function run() {
         result.status = `请求失败：${e.message}`;
     } finally {
         running.value = false;
+        await linkTask;
     }
 }
 
 /**
- * 「复制链接」：优先复制订阅分发链接（编辑后的订阅，带派生只读密钥，
- * 可直接发给别人 / 粘进客户端；分发通道不转换）。
- * 直连等没有分发链接的形态，回退用当前转换参数拼出 /sub?... 直链
- * —— 注意那条直链带管理令牌，只适合自己用。
+ * 「复制链接」：优先复制**成品链接** —— 转换后端格式的那条地址
+ * （`<转换后端>/sub?target=…&url=…&config=…`，后端是哪台就是哪台）。
+ * 它是这次转换真正打出去的地址，粘进客户端或浏览器都能复现同一次转换。
+ *
+ * 拿不到后端链接时（接口失败 / target=raw）退回订阅分发链接（编辑后的订阅，
+ * 带派生只读密钥、不转换）；连分发链接都没有的形态（来源全是外部地址）
+ * 才退回带管理令牌的本站直链 —— 那条只适合自己用。
  */
 function copyResultLink() {
+    if (result.backendUrl) {
+        navigator.clipboard.writeText(result.backendUrl).then(
+            () => message.success('已复制成品链接（转换后端格式）'),
+            () => message.error('复制失败，请手动复制'),
+        );
+        return;
+    }
     if (shareLink.value) {
         navigator.clipboard.writeText(shareLink.value).then(
             () => message.success('已复制订阅分发链接（编辑后的订阅，不转换）'),

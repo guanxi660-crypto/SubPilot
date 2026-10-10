@@ -37,6 +37,11 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       # SQLite 文件位置。放在卷里才会持久化；想换目录（比如挂 NFS）改这里。
       DB_FILE: ${DB_FILE:-/data/subpilot.db}
+      # 出网守卫（SSRF）逃生开关。默认空 = 关闭，用户填的地址一律不许指向内网。
+      # 若 SCE / WebDAV / 大模型都跑在内网，在 .env 里设 SUBPILOT_ALLOW_PRIVATE_FETCH=1。
+      SUBPILOT_ALLOW_PRIVATE_FETCH: ${SUBPILOT_ALLOW_PRIVATE_FETCH:-}
+      # 前面有自建反向代理时才设 1（信任 X-Forwarded-For 最后一跳作为来源 IP）。
+      TRUST_PROXY: ${TRUST_PROXY:-}
 
     volumes:
       # 所有业务数据都在这一个目录里（SQLite，见 apps/server/node/sqlite-store.mjs）。

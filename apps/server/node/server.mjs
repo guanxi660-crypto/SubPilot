@@ -20,6 +20,7 @@
 //   2. **SQLite 行级写入 + WAL**，见 sqlite-store.mjs。
 
 import { createServer } from 'node:http';
+import { lookup } from 'node:dns/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -49,6 +50,14 @@ const store = createSqliteStore(DB_FILE);
 const env = {
     SUBPILOT_TOKEN: process.env.SUBPILOT_TOKEN || '',
     SUB_BACKEND: process.env.SUB_BACKEND || '',
+    // SSRF 守卫的逃生开关（netguard.js 的 ssrfOptions 读它）。给「SCE / WebDAV /
+    // 大模型都跑在内网」的自建部署用；默认关闭，即内网地址一律拒绝。
+    SUBPILOT_ALLOW_PRIVATE_FETCH: process.env.SUBPILOT_ALLOW_PRIVATE_FETCH || '',
+    // SSRF 守卫的「域名解析复核」（审计 M2）。
+    // Workers 运行时拿不到 DNS 查询能力，自建侧可以 —— 于是「公网域名解析到
+    // 127.0.0.1」这种 DNS rebinding 也能挡住（静态 DNS 场景；攻击者能在校验与
+    // 连接之间翻转解析结果的极端情况仍无法根治，见 README 已知限制）。
+    RESOLVE_HOST: async (host) => (await lookup(host, { all: true })).map((r) => r.address),
     STORE: store,
     ASSETS: createAssets(ASSETS_DIR),
 };
@@ -92,16 +101,41 @@ async function toWebRequest(req) {
         if (Array.isArray(v)) for (const x of v) headers.append(k, x);
         else if (v !== undefined) headers.set(k, v);
     }
-    // convert.js 的 clientIp() 读 CF-Connecting-IP / X-Real-IP / X-Forwarded-For，
-    // 直连时一个都没有，不补就会把「谁在拉订阅」全记成 local。
-    if (!headers.has('cf-connecting-ip') && !headers.has('x-forwarded-for') && !headers.has('x-real-ip')) {
-        const ip = req.socket.remoteAddress;
-        if (ip) headers.set('cf-connecting-ip', ip);
-    }
+    // ---- 来源 IP 可信化（审计 L1）----
+    // convert.js 的 clientIp() 无条件信任 CF-Connecting-IP / X-Real-IP /
+    // X-Forwarded-For。Cloudflare 部署下这些头由平台覆写、不可伪造；但自建部署下
+    // 客户端随手加一个 `CF-Connecting-IP: 1.2.3.4` 就能把分发统计写成任意 IP。
+    //
+    // 所以这里先把客户端自带的 IP 头**全部删掉**，再写入我们认定可信的那一个：
+    //   · 默认（TRUST_PROXY 未开）：socket 的对端地址。
+    //   · TRUST_PROXY=1：前面有自己部署的反代，取 X-Forwarded-For 的**最后一跳**
+    //     —— 那一跳是反代写进去的；客户端自己伪造的会被挤到前面去。
+    for (const h of ['cf-connecting-ip', 'x-real-ip', 'x-forwarded-for']) headers.delete(h);
+    const clientIp = resolveClientIp(req);
+    if (clientIp) headers.set('cf-connecting-ip', clientIp);
 
     const method = (req.method || 'GET').toUpperCase();
     const body = method === 'GET' || method === 'HEAD' ? undefined : await readBody(req);
     return new Request(url, { method, headers, body });
+}
+
+/** 反代部署时是否信任转发头。默认不信任 —— 见 toWebRequest 里的说明。 */
+const TRUST_PROXY = /^(1|true|yes)$/i.test(String(process.env.TRUST_PROXY || ''));
+
+/** 认定可信的客户端 IP。 */
+function resolveClientIp(req) {
+    if (TRUST_PROXY) {
+        const xff = req.headers['x-forwarded-for'];
+        const raw = Array.isArray(xff) ? xff.join(',') : String(xff || '');
+        const hops = raw
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean);
+        if (hops.length) return hops[hops.length - 1];
+        const real = firstValue(req.headers['x-real-ip']);
+        if (real) return real;
+    }
+    return req.socket.remoteAddress || '';
 }
 
 function firstValue(v) {

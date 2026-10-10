@@ -78,10 +78,22 @@
         <div class="card p-5 mt-4 fade-up" style="--d:250ms">
             <div class="flex items-center gap-3 flex-wrap">
                 <div class="text-sm font-semibold">分发统计</div>
-                <div v-if="stats.items.length" class="flex gap-2 text-[11px]">
+                <div v-if="stats.items.length" class="flex gap-2 text-[11px] flex-wrap">
                     <span class="px-2 py-0.5 rounded-full bg-panel2 border border-line">总拉取 {{ stats.total }}</span>
                     <span class="px-2 py-0.5 rounded-full bg-panel2 border border-line">项目 {{ stats.itemCount }}</span>
                     <span class="px-2 py-0.5 rounded-full bg-panel2 border border-line">独立 IP {{ stats.ipCount }}</span>
+                    <!-- 条目上限可见化：贴着上限时用户要知道「记录被裁剪过」，
+                         否则只会觉得数据莫名变少 -->
+                    <span
+                        class="px-2 py-0.5 rounded-full bg-panel2 border border-line"
+                        :class="stats.entries >= (stats.limit || 0) * 0.9 ? 'text-amber-300/90' : ''"
+                        :title="`统计以「类型|项目|IP」为条目，超过 ${stats.limit} 条会按最近拉取时间淘汰最旧的一批`"
+                    >统计条目 {{ stats.entries }} / {{ stats.limit }}</span>
+                    <span
+                        v-if="stats.dropped"
+                        class="px-2 py-0.5 rounded-full bg-panel2 border border-line text-amber-300/90"
+                        title="已按最近拉取时间淘汰的旧条目累计数"
+                    >已淘汰 {{ stats.dropped }}</span>
                 </div>
                 <div class="ml-auto flex gap-2">
                     <button
@@ -140,7 +152,7 @@ const subs = ref([]);
 const collections = ref([]);
 const converted = ref([]);
 const files = ref([]);
-const stats = ref({ total: 0, itemCount: 0, ipCount: 0, items: [] });
+const stats = ref({ total: 0, itemCount: 0, ipCount: 0, entries: 0, limit: 5000, dropped: 0, items: [] });
 const loading = ref(false);
 const masked = ref(true);
 
@@ -201,7 +213,7 @@ async function load() {
 async function clearStats() {
     try {
         await api('/api/stats', { method: 'DELETE' });
-        stats.value = { total: 0, itemCount: 0, ipCount: 0, items: [] };
+        stats.value = { total: 0, itemCount: 0, ipCount: 0, entries: 0, limit: stats.value.limit || 5000, dropped: 0, items: [] };
     } catch {
         /* ignore */
     }

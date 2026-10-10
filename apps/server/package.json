@@ -4,6 +4,9 @@
     "private": true,
     "license": "AGPL-3.0-only",
     "type": "module",
+    "engines": {
+        "node": ">=22.5"
+    },
     "scripts": {
         "dev": "wrangler dev -c wrangler.dev.jsonc --port 8795 --persist-to=.wrangler/state",
         "deploy": "wrangler deploy -c wrangler.jsonc",

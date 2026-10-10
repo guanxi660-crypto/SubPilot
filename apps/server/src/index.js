@@ -6,6 +6,7 @@
 //   /api/telegram/*  TG 推送（配置 / 测试 / 推送）
 //   /ai/*       AI 助手（SSE）
 //   /sub        转换（转发 SubConverter-Extended）
+//   /api/convert-link 成品链接（只要那条后端格式的地址，不真转换）
 //   /download/* 分发链接（客户端直接拉）
 //   /feed/*     处理后的节点列表（供 SCE 拉取）
 //   /share/*    分享码分发（公开，分享码本身即凭证）
@@ -14,12 +15,13 @@
 //
 // 鉴权 fail-closed：SUBPILOT_TOKEN 未配置时，所有受保护路由一律 401，不做放行。
 
-import { fail, safeEqual, text } from './util.js';
+import { fail, json, safeEqual, text } from './util.js';
+import { checkRateLimit, noteFailure, noteSuccess, rateLimitKey } from './ratelimit.js';
 import { handleApi } from './api.js';
 import { handleSync } from './sync.js';
 import { handleTelegram, autoPushAfterMutation, isTargetMutation } from './telegram.js';
 import { handleAiStream, handleAiAbort, handleAiModels, handleAiTest, handleAiPresets } from './ai.js';
-import { handleSub, handleDownload, handleFeed, handleShare, handleHealthz } from './convert.js';
+import { handleSub, handleConvertLink, handleDownload, handleFeed, handleShare, handleHealthz, clientIp } from './convert.js';
 
 // 需要管理令牌的前缀。
 // 注意 /feed/ 与 /download/ 不在这里 —— 它们的地址要写进客户端配置长期使用，
@@ -76,6 +78,15 @@ async function handleRequest(request, env, ctx) {
         if (path === '/healthz') return handleHealthz();
 
         // ---- 鉴权 ----
+        // 失败限流（审计 M3）：只对**失败**计数，成功一次即清零。
+        // 没有它时，S1 那种「可离线枚举的令牌判定」配合不限流的接口就是一个
+        // 可以慢慢试到对的爆破面。
+        //
+        // ⚠️ 顺序很关键：**先比令牌，再判封禁**。
+        // 反过来的话（封禁命中就直接 429），用户自己在浏览器里连着输错几次就会被
+        // 自己锁在门外 15 分钟 —— 单用户面板里这是纯粹的自伤，而且没有任何绕过
+        // 风险：能通过令牌校验的人本来就该放行。爆破者没有正确令牌，照样撞在 429 上。
+        // safeEqual 是常量时间的，所以这个顺序也不泄漏额外信息。
         const tokenFromAuth = extractToken(request, query);
         if (isProtected(path, method)) {
             const expected = String(env.SUBPILOT_TOKEN || '');
@@ -85,7 +96,17 @@ async function handleRequest(request, env, ctx) {
                     401,
                 );
             }
-            if (!tokenFromAuth || !safeEqual(tokenFromAuth, expected)) {
+
+            const rlKey = rateLimitKey(clientIp(request), path);
+            const tokenOk = !!tokenFromAuth && safeEqual(tokenFromAuth, expected);
+
+            if (tokenOk) {
+                noteSuccess(rlKey);
+            } else {
+                const pre = checkRateLimit(rlKey);
+                if (pre.blocked) return tooManyRequests(pre.retryAfter);
+                const after = noteFailure(rlKey);
+                if (after.blocked) return tooManyRequests(after.retryAfter);
                 return fail('需要访问令牌', 401);
             }
         }
@@ -94,6 +115,11 @@ async function handleRequest(request, env, ctx) {
 
         try {
             if (path === '/sub') return await handleSub(request, env, ctx, ctxArgs);
+
+            // 成品链接（转换后端格式）。放在 /api/ 分支**之前** —— 否则会被
+            // handleApi 当成「未知的 api 资源」接走。它属于转换，不属于本站数据，
+            // 所以留在 convert.js 里、由这里直接路由。
+            if (path === '/api/convert-link') return await handleConvertLink(request, env, ctx, ctxArgs);
 
             if (path.startsWith('/api/sync/')) return await handleSync(request, env, ctx, ctxArgs);
             if (path.startsWith('/api/telegram/')) return await handleTelegram(request, env, ctx, ctxArgs);
@@ -163,6 +189,11 @@ async function handleRequest(request, env, ctx) {
             }
             return text('未绑定静态资源（ASSETS）。请先 npm run build。', 404);
         } catch (e) {
+            // 带 expose 标记的异常是**预期内的业务失败**（SSRF 被拦、正文超限、
+            // 写冲突等，见 util.js 的 ApiError / netguard.js / storage.js）——
+            // 它们可能从很深的工具函数里抛出，中途没有合适的 catch，所以在入口
+            // 统一翻成对应的状态码。其余异常一律折叠，不把内部细节回给客户端。
+            if (e?.expose) return fail(e.message, e.status || 400);
             return fail(`服务器内部错误：${e?.message || e}`, 500);
         }
     }
@@ -184,4 +215,16 @@ function extractToken(request, query) {
     const auth = request.headers.get('Authorization') || '';
     if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
     return query.get('token') || '';
+}
+
+/** 限流响应。带 Retry-After（秒），让客户端知道多久后能再试。 */
+function tooManyRequests(retryAfter) {
+    return json(
+        {
+            status: 'failed',
+            message: `令牌校验失败次数过多，已暂时拒绝来自该来源的请求。请在 ${retryAfter} 秒后重试。`,
+        },
+        429,
+        { 'Retry-After': String(retryAfter) },
+    );
 }

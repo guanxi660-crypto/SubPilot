@@ -53,10 +53,10 @@ SCE 是无状态的：只有 `/sub`、`/version`、`/healthz` 等少数路由，
 | JSON 脚本 | 14 种算子组成链（筛选、重命名、排序、地区置顶、去重、国旗、限量…），内联在订阅 / 组合编辑页；内置「一键整理」模板 + 自定义模板 |
 | 组合 | 多个订阅合并为一个产出，可叠加组合层算子链 |
 | 文件 | 规则集 / 模板 / 片段；卡片：编辑 / 下载 / 生成链接 / 分享链接 / TG |
-| 转换 | 8 种目标格式（clash / sing-box / Shadowrocket / VLESS / Hysteria2 / Trojan / SS / SSR），生成分发链接与 feed 地址；多选来源同样有分发链接；成品可保存、下载、固定分享 |
+| 转换 | 8 种目标格式（clash / sing-box / Shadowrocket / VLESS / Hysteria2 / Trojan / SS / SSR），生成分发链接与 feed 地址；多选来源同样有分发链接；成品可保存、下载、固定分享。产出卡还给一条**成品链接**——这次转换实际打到的后端地址（`<转换后端>/sub?target=…&url=…&config=…`，后端是哪台就是哪台），粘进浏览器即可复现同一次转换 |
 | AI 助手 | 描述需求生成 JSON 脚本，SSE 流式输出；提案可预览（跑一遍管线看结果）、保存、忽略 |
-| 同步 | Gist / WebDAV 备份恢复（**仅 WebDAV 目标地址**做基础私网拦截，见「已知限制」）；Telegram 推送（Bot Token 只存服务端，接口只回掩码）。**备份不含设置** —— 导出的是脱敏后的 `settings`（只剩 `hasApiKey` / `tokenSet` 之类的标记），导入也只合并订阅 / 组合 / 文件 / 成品 / 模板五张表，换机后转换后端、公开地址、TG、AI 配置都要重填 |
-| 分发统计 | 记录 `/download/*` 与 `/share/*` 的拉取次数与来源 IP，可导出 CSV |
+| 同步 | Gist / WebDAV 备份恢复；Telegram 推送（Bot Token 只存服务端，接口只回掩码）。备份含订阅 / 组合 / 文件 / 成品 / 模板**与设置里的非凭据字段**（转换后端、公开地址、默认目标格式、AI Base URL 与模型、TG 推送目标）；**凭据不进备份**，换机后只需补填 AI Key / Gist Token / 网盘密码 / Bot Token |
+| 分发统计 | 记录 `/download/*` 与 `/share/*` 的拉取次数与来源 IP，可导出 CSV。条目上限 5000，超出按最近拉取时间淘汰最旧的一批，淘汰量在概览页可见 |
 
 ## 本地开发
 
@@ -83,6 +83,8 @@ SUBPILOT_TOKEN=dev-local-token npm start        # → http://127.0.0.1:8795，�
 ```bash
 node scripts/verify.mjs                  # 接口验证（检测到真实数据时自动跳过写入类断言）
 node scripts/verify-security.mjs         # 53 项安全回归（常量时间比较 / 明文令牌 / 安全头 / 协议白名单）
+node scripts/verify-hardening.mjs        # 172 项加固回归（SSRF 逐跳复检 / 失败限流 / 正文上限 / 来源 IP / 设置备份 / 并发写）
+node scripts/verify-convert-link.mjs     # 40 项成品链接回归（后端格式 / host 跟随自定义后端 / 参数不漂移）
 node scripts/verify-regions.mjs          # 56 项地区识别回归（纯函数）
 node scripts/verify-operators.mjs        # 11 项算子回归（纯函数）
 node scripts/verify-presets.mjs          # 104 条配置预设与 SubPilot-Archive 逐字一致
@@ -201,14 +203,15 @@ LICENSE (AGPL-3.0-only)  NOTICE
 
 | 项 | 现状 | 影响 |
 | --- | --- | --- |
-| 令牌校验无限流 | `/api/*`、`/ai/*`、`/sub` 只有「令牌相等则放行」，没有失败计数 / 锁定 / 退避 | 弱令牌可被爆破；建议把 `SUBPILOT_TOKEN` 用 `openssl rand -hex 24` 生成 |
-| 统计条目无上限 | `记录` 以 `类型\|项目\|IP` 为 key 无限累加，只有手工 `DELETE /api/stats` 才清 | KV 部署下单值逼近 25MiB 上限后会**静默停止**计数（写入失败被 `waitUntil` 吞掉）；需要定期清理 |
-| 订阅正文无体积上限 | 文件限 512KiB、成品限 16MiB，但本地订阅的 `content` 没有限制 | KV 部署下超大订阅会让快照写入失败 |
-| SSRF 校验覆盖面窄 | 只有 WebDAV 目标地址做了私网拦截，且**只判字面 IP**：域名解析结果、302 跳转都不复查 | `/sub?url=`、`/api/preview/*` 取源无防护。**自建部署请勿暴露到公网**，或在外层反代/防火墙限制出网 |
-| 来源 IP 可伪造 | `clientIp()` 信任 `CF-Connecting-IP` → `X-Real-IP` → `X-Forwarded-For` | 自建部署下分发统计的 IP 维度不可信。Cloudflare 部署下这些头由平台覆写，不受影响 |
-| 并发写无乐观锁 | `mutate()` 是「读整份 → 改 → 写回」，没有版本号 | 同一瞬间的两个写操作，后写的覆盖先写的且不报错。单用户面板概率低 |
-| 备份不含设置 | 见上表「同步」行 | 换机恢复后需重填转换后端 / 公开地址 / TG / AI 配置 |
+| 限流是**进程内**的 | 令牌失败计数存在进程内存里（`ratelimit.js`），5 分钟窗口 / 20 次失败 / 封禁 15 分钟。正确令牌永远放行（不会把自己锁在门外） | 自建单进程能真正拦住；Cloudflare Workers 的内存态**单 isolate**，跨 isolate / 跨 colo 不共享，只是显著提高爆破成本。要硬保证得用边缘 Rate Limiting 规则或 Durable Object |
+| SSRF 复核有两条盲区 | 出网守卫已统一收口（`netguard.js`），但 ① Workers 运行时拿不到 DNS，只做字面检查；② 本机 DNS 是 Clash / mihomo 的 **fake-IP** 模式时，所有域名都解析到 `198.18.0.0/15`，解析复核自动跳过 | 挡得住「直接填内网 IP / 内网域名」（含十进制、十六进制、短写等混淆形式），挡不住「公网域名解析到内网」—— 自建侧能挡，Workers 侧不能。**自建部署仍建议在外层防火墙限制出网** |
+| 跨进程并发写仍可能丢 | `mutate()` 已在进程内串行化；SQLite 驱动另有 `rev` 乐观锁，冲突时重放一次 | 同一进程内的并发写不会丢（含「保存成品」撞上「TG 即时推送写 lastPush」这种组合）；Workers 多 isolate / 跨 colo 仍是 last-write-wins，那需要 Durable Object |
+| `TRUST_PROXY` 配错会让 IP 不可信 | 自建侧默认只信 `socket.remoteAddress`，并**先删掉**客户端自带的 IP 头；只有显式设 `TRUST_PROXY=1` 才取 `X-Forwarded-For` 的最后一跳 | 前面没有反代却开了 `TRUST_PROXY`，等于把 IP 头交回给客户端，分发统计的 IP 维度就不可信了。Cloudflare 部署下这些头由平台覆写，不受影响 |
 | 无 CSP | 只加了 `nosniff` / `X-Frame-Options` / `Referrer-Policy` | 前端大量内联 style，收紧 `style-src` 会直接打坏布局，需要单独评估 |
+
+**各处上限一览**（超限一律明确拒绝并说明当前体积，不会 500）：
+订阅正文 8MiB（`413`）、文件 512KiB、成品 16MiB、算子链 20000 条、
+分享码 900 条、统计条目 5000 条、备份单包 20MiB、模板 50 条 × 100 算子。
 
 安全响应头的落地方式分两处，改的时候别漏：**Worker 生成的响应**由
 `apps/server/src/index.js` 的 `withSecurityHeaders()` 加；**静态资源**（`index.html`、

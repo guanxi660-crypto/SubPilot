@@ -20,12 +20,13 @@
 // 因此它们**不接受管理令牌以外的唯一方式** —— 优先用 HMAC 派生的只读分发密钥
 // （?ft=），见 feedkey.js 的说明。管理令牌仍然可用（方便排障）。
 
-import { safeEqual, b64decode, b64encode, b64urlEncode, ok, fail, text, toStringArray, isPlainObject } from './util.js';
+import { safeEqual, b64decode, b64encode, b64urlEncode, ok, fail, text, toStringArray, isPlainObject, ApiError } from './util.js';
 import { loadSnapshot, recordPull, mutate } from './storage.js';
-import { resolveBackend, callSce, describeSceError } from './sce.js';
+import { resolveBackend, callSce, describeSceError, buildSceUrl } from './sce.js';
 import { runPipeline, stripRefPrefix } from './pipeline.js';
 import { serializeNodes } from './nodes.js';
 import { deriveFeedKey, ensureFeedSalt, checkFeedKey } from './feedkey.js';
+import { checkUrl, ssrfOptions } from './netguard.js';
 
 /** 对外基地址：优先用设置里的 publicBaseUrl，否则取请求来源 */
 export function publicBase(request, settings) {
@@ -35,7 +36,16 @@ export function publicBase(request, settings) {
     return `${u.protocol}//${u.host}`;
 }
 
-function clientIp(request) {
+/**
+ * 取来源 IP。
+ *
+ * ⚠️ 这里**无条件信任**这几个头，因为 Cloudflare 部署下它们由平台覆写、不可伪造。
+ * 自建（Node / Docker）部署下则完全可被客户端伪造 —— 所以 node/server.mjs 的
+ * toWebRequest() 会在进 Worker 之前把这三个头**先全部删掉**，再写入它认定可信的
+ * 那一个（默认 socket 对端地址；TRUST_PROXY=1 时取 X-Forwarded-For 最后一跳）。
+ * 也就是说：可信性由平台边界负责，这里只负责读（审计 L1）。
+ */
+export function clientIp(request) {
     return (
         request.headers.get('CF-Connecting-IP') ||
         request.headers.get('X-Real-IP') ||
@@ -234,16 +244,21 @@ async function buildFeedUrl(env, snap, { base, sub, collection, adhoc }) {
 // ---------------------------------------------------------------- /sub
 
 /**
- * 主转换端点。参数与 SCE 的 /sub 基本一致，额外支持：
- *   sub=<订阅名>        引用本站订阅
- *   collection=<组合名>  引用本站组合
- *   process=<base64>    临时算子链（JSON 数组的 base64）
- *   direct=1            强制不本地处理，原样交给 SCE
+ * 把 /sub 的查询参数解析成「一次转换」所需的全部东西。
+ *
+ * 抽成独立函数是因为有两条路要用它：
+ *   · handleSub         —— 真去调转换后端并代理响应
+ *   · handleConvertLink —— 只要那条**后端格式的成品链接**，不真转换
+ * 共用同一份解析，链接才不可能和实际转换用的参数漂移。
+ *
+ * 校验失败一律抛 ApiError（status + expose，见 util.js）—— 由 index.js 的
+ * 入口 catch 统一翻成 400/404，调用方不必再逐层搬运错误对象。
+ *
+ * @returns {{ raw:true, base:string, sources:Array, process:Array }
+ *          | { raw:false, base:string, sceParams:object, local:boolean }}
  */
-export async function handleSub(request, env, ctx, { query, method, tokenFromAuth }) {
-    const snap = await loadSnapshot(env);
+async function prepareConversion(request, env, snap, params) {
     const base = resolveBackend(env, snap.settings);
-    const params = extractParams(query);
 
     // ---- 解析来源 ----
     let sub = null;
@@ -253,11 +268,11 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
 
     if (params.sub) {
         sub = snap.subs.find((s) => s.name === params.sub);
-        if (!sub) return fail(`订阅不存在：${params.sub}`, 404);
+        if (!sub) throw new ApiError(`订阅不存在：${params.sub}`, 404);
         sources.push({ ref: sub.name, process: sub.process || [] });
     } else if (params.collection) {
         collection = snap.collections.find((c) => c.name === params.collection);
-        if (!collection) return fail(`组合不存在：${params.collection}`, 404);
+        if (!collection) throw new ApiError(`组合不存在：${params.collection}`, 404);
         for (const n of collection.subscriptions || []) {
             const s = snap.subs.find((x) => x.name === n);
             if (s)
@@ -280,49 +295,19 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
             const parsed = JSON.parse(b64decode(params.process));
             if (Array.isArray(parsed)) process = parsed;
         } catch {
-            return fail('process 参数不是合法的 base64 JSON 数组', 400);
+            throw new ApiError('process 参数不是合法的 base64 JSON 数组', 400);
         }
     }
 
     if (!sources.length) {
-        return fail('缺少来源：请提供 url、sub 或 collection 参数', 400);
+        throw new ApiError('缺少来源：请提供 url、sub 或 collection 参数', 400);
     }
 
     // ---- raw 通道：编辑后的订阅（Sub-Store 模式），完全不经过 SCE ----
-    // 分发/分享链接输出的就是**编辑后的节点本身**：URI 来源 → v2ray base64
-    // URI 列表（通用订阅，各客户端直接导入、当转换输入也不会二次转换翻车）；
-    // clash 来源 → 本地序列化的 clash YAML（stringifyYaml，同样不经 SCE）。
-    // ?target=xxx 在分发通道被忽略 —— SCE 实时转换只保留给转换页（/sub
-    // 显式 target）与「保存成品」（/api/converted），分享链接永远不转换。
-    if (params.target === 'raw') {
-        let result;
-        try {
-            result = await runPipeline(env, snap, { sources, process });
-        } catch (e) {
-            return fail(`节点处理失败：${e.message || e}`, 500);
-        }
-
-        if (!result.nodes.length) return fail('来源没有可分发的节点', 404);
-
-        // 有 URI 载体就输出通用订阅（clash 形态节点混在里面出不了 URI，
-        // 会被 serializeNodes 的 filter(Boolean) 掉 —— 数量头按实际输出计）；
-        // 全是 clash 形态（没有 URI 载体）就本地产 clash YAML。
-        const uriNodes = result.nodes.filter((n) => n.raw);
-        if (uriNodes.length) {
-            return text(serializeNodes(result.nodes, 'uri'), 200, 'text/plain;charset=UTF-8', {
-                'Cache-Control': 'no-store',
-                'X-SubPilot-Nodes': String(uriNodes.length),
-                'X-SubPilot-Format': 'uri',
-                'Access-Control-Allow-Origin': '*',
-            });
-        }
-        return text(serializeNodes(result.nodes, 'clash'), 200, 'text/yaml;charset=UTF-8', {
-            'Cache-Control': 'no-store',
-            'X-SubPilot-Nodes': String(result.nodes.length),
-            'X-SubPilot-Format': 'clash',
-            'Access-Control-Allow-Origin': '*',
-        });
-    }
+    // 这里只把来源交回去，真正的产出由 handleSub 调 rawChannel 完成 ——
+    // raw 没有「后端链接」可言（本地直出，不经过任何转换后端），
+    // 所以下面拼 sceParams 的那段直接跳过。
+    if (params.target === 'raw') return { raw: true, base, sources, process };
 
     const forceDirect = params.direct === '1' || params.direct === 'true';
     const local = !forceDirect && needsLocalProcessing({ sources, process, sub, collection });
@@ -353,7 +338,7 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
                     adhoc: adhocSpec([s], []),
                 });
                 if (feedUrl.length > 4000) {
-                    return fail(
+                    throw new ApiError(
                         '算子链过长，生成的 feed 地址超过 4000 字符。请精简算子，或把它保存为订阅后再分发。',
                         400,
                     );
@@ -371,7 +356,7 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
                 adhoc,
             });
             if (feedUrl.length > 4000) {
-                return fail(
+                throw new ApiError(
                     '算子链过长，生成的 feed 地址超过 4000 字符。请精简算子，或把它保存为订阅后再分发。',
                     400,
                 );
@@ -389,22 +374,96 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
         // 不本地处理：把原始地址交给 SCE，保留它的 Provider / 原生远程资源模式。
         // 单来源也逐条带上 tag:/provider: 前缀（显示名作 provider 名）——
         // 否则 SCE 生成的 provider 是无名的，zashboard 里分不清哪条是哪条。
+        // 交给 SCE 的地址要先过 SSRF 守卫：SCE 会真的去拉这个地址，而自建部署下
+        // SCE 往往与 SubPilot 在同一内网 —— 不挡就等于把内网可达性转手给了
+        // 任何一个拿到分发密钥的人（审计 M2）。校验必须在**装饰前缀之前**做，
+        // 否则 tag:/provider: 会被当成地址的一部分。
         const urls = [];
         for (const s of sources) {
             const stored = snap.subs.find((x) => x.name === s.ref);
             if (stored) {
                 if (stored.source === 'local') {
-                    return fail(`订阅「${stored.name}」是本地内容，必须走本地处理（请去掉 direct=1）`, 400);
+                    throw new ApiError(
+                        `订阅「${stored.name}」是本地内容，必须走本地处理（请去掉 direct=1）`,
+                        400,
+                    );
                 }
                 for (const u of toStringArray(stored.url)) {
+                    const bad = await checkUrl(
+                        u,
+                        ssrfOptions(env, { allowHttp: true, label: `订阅「${stored.name}」的地址` }),
+                    );
+                    if (bad) throw new ApiError(bad, 400);
                     urls.push(decorateSourceUrl(u, sourceLabel(snap, s.ref), sceParams.target));
                 }
             } else {
+                const bad = await checkUrl(
+                    s.ref,
+                    ssrfOptions(env, { allowHttp: true, label: '来源地址' }),
+                );
+                if (bad) throw new ApiError(bad, 400);
                 urls.push(decorateSourceUrl(s.ref, sourceLabel(snap, s.ref), sceParams.target));
             }
         }
         sceParams.url = urls.join('|');
     }
+
+    return { raw: false, base, sceParams, local };
+}
+
+/**
+ * raw 通道：输出**编辑后的节点本身**，完全不经过 SCE。
+ *
+ * 分发/分享链接走的就是这条路：URI 来源 → v2ray base64 URI 列表（通用订阅，
+ * 各客户端直接导入、当转换输入也不会二次转换翻车）；clash 来源 → 本地序列化的
+ * clash YAML（stringifyYaml，同样不经 SCE）。
+ */
+async function rawChannel(env, snap, sources, process) {
+    let result;
+    try {
+        result = await runPipeline(env, snap, { sources, process });
+    } catch (e) {
+        throw new ApiError(`节点处理失败：${e.message || e}`, 500);
+    }
+
+    if (!result.nodes.length) throw new ApiError('来源没有可分发的节点', 404);
+
+    // 有 URI 载体就输出通用订阅（clash 形态节点混在里面出不了 URI，
+    // 会被 serializeNodes 的 filter(Boolean) 掉 —— 数量头按实际输出计）；
+    // 全是 clash 形态（没有 URI 载体）就本地产 clash YAML。
+    const uriNodes = result.nodes.filter((n) => n.raw);
+    if (uriNodes.length) {
+        return text(serializeNodes(result.nodes, 'uri'), 200, 'text/plain;charset=UTF-8', {
+            'Cache-Control': 'no-store',
+            'X-SubPilot-Nodes': String(uriNodes.length),
+            'X-SubPilot-Format': 'uri',
+            'Access-Control-Allow-Origin': '*',
+        });
+    }
+    return text(serializeNodes(result.nodes, 'clash'), 200, 'text/yaml;charset=UTF-8', {
+        'Cache-Control': 'no-store',
+        'X-SubPilot-Nodes': String(result.nodes.length),
+        'X-SubPilot-Format': 'clash',
+        'Access-Control-Allow-Origin': '*',
+    });
+}
+
+/**
+ * 主转换端点。参数与 SCE 的 /sub 基本一致，额外支持：
+ *   sub=<订阅名>        引用本站订阅
+ *   collection=<组合名>  引用本站组合
+ *   process=<base64>    临时算子链（JSON 数组的 base64）
+ *   direct=1            强制不本地处理，原样交给 SCE
+ *
+ * ⚠️ ?target=xxx 只在**这条通道**上有效。分发通道（/download、/share）会把
+ * target 无条件改写成 raw，见 handleDownload 注释 —— 分享链接永远不转换。
+ */
+export async function handleSub(request, env, ctx, { query, method, tokenFromAuth }) {
+    const snap = await loadSnapshot(env);
+    const prep = await prepareConversion(request, env, snap, extractParams(query));
+    if (prep.raw) return rawChannel(env, snap, prep.sources, prep.process);
+
+    const { base, sceParams, local } = prep;
 
     // ---- 调用 SCE 并代理响应 ----
     try {
@@ -421,6 +480,33 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
     } catch (e) {
         return fail(`调用转换后端失败：${e.message || e}`, 502);
     }
+}
+
+/**
+ * 成品链接：这次转换**实际会打到的那条后端地址**，原样保留后端的参数格式。
+ *
+ * 形如 `<转换后端>/sub?target=…&url=…&config=…`，其中 `<转换后端>` 就是
+ * resolveBackend 定的那台 —— 部署默认（SUB_BACKEND）或设置里自定义的，
+ * **后端是哪台就用哪台**，不重写成 SubPilot 自己的 /download、/share 形态。
+ *
+ * 与 /sub 共用 prepareConversion，所以链接里的参数和真正转换时发给后端的
+ * 一模一样（多来源的 tag:/provider: 前缀、本地订阅折成的 /feed 地址都在里面）——
+ * 换句话说，把这条链接粘进浏览器，得到的会是同一次转换。
+ *
+ * 不真去转换：这个接口是给「产出」卡片拿链接用的，转换本身另有 /sub。
+ * 它也不需要 ctx（不写统计）。
+ */
+export async function handleConvertLink(request, env, ctx, { query }) {
+    const snap = await loadSnapshot(env);
+    const prep = await prepareConversion(request, env, snap, extractParams(query));
+    if (prep.raw) {
+        throw new ApiError('target=raw 由本站本地直出，不经过转换后端，没有后端链接', 400);
+    }
+    return ok({
+        backend: prep.base,
+        local: prep.local,
+        url: buildSceUrl(prep.base, prep.sceParams),
+    });
 }
 
 /** 透传少量对 SCE 有意义的请求头（provider_headers 会用到） */

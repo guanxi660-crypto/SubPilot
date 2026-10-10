@@ -64,6 +64,29 @@ const created = (made.json?.data || []).find((x) => x.name === NAME);
 ok('保存后立即带 shareCode', !!created?.shareCode, created?.shareCode || '(空)');
 ok('列表项带 size 且不泄漏 content', typeof created?.size === 'number' && !('content' in (created || {})), `size=${created?.size}`);
 
+// ---- 成品链接（2026-10-11 新增）：卡片复制 / TG 推送用的都是它 ----
+// 形状 = <转换后端>/sub?target=<成品格式>&url=<成品自身的快照>&config=<模板>
+const parseLink = (s) => {
+    try {
+        return new URL(s);
+    } catch {
+        return null;
+    }
+};
+const convLink = parseLink(created?.link || '');
+ok('列表项带 link（成品链接）', !!convLink && /\/sub$/.test(convLink.pathname), created?.link || '(空)');
+ok('成品链接带 target=<成品格式>', convLink?.searchParams.get('target') === 'clash', created?.link || '');
+ok('成品链接带后端域名（不是本站 /share 直链）', !!convLink && !convLink.pathname.includes('/share/'), created?.link || '');
+ok('成品链接上没有任何来源标记', !/[?&]src=/.test(created?.link || ''), created?.link || '');
+{
+    const inner = parseLink(convLink?.searchParams.get('url') || '');
+    ok(
+        '成品链接的 url= 指向该成品自身的快照',
+        !!inner && inner.pathname === `/share/converted/${NAME}` && inner.searchParams.get('code') === created?.shareCode,
+        convLink?.searchParams.get('url') || '(空)',
+    );
+}
+
 // 固定链接语义：重存（改 target）后 code 必须原封不动 ——
 // 否则客户端配置里嵌的地址一换，所有人都得重新分发一遍。
 const FIXED_CODE = created?.shareCode || '';
@@ -81,6 +104,17 @@ if (FIXED_CODE) {
     const it2 = (again.json?.data || []).find((x) => x.name === NAME);
     ok('重存后 shareCode 不变', it2?.shareCode === FIXED_CODE, `${it2?.shareCode}`);
     ok('重存后 target 已更新', it2?.target === 'shadowrocket', it2?.target);
+    ok(
+        '重存后成品链接的 target 跟着更新',
+        (() => {
+            try {
+                return new URL(it2?.link || '').searchParams.get('target') === 'shadowrocket';
+            } catch {
+                return false;
+            }
+        })(),
+        it2?.link || '(空)',
+    );
     const hit2 = await fetch(url1);
     ok('重存后固定链接仍然有效', hit2.status === 200, `HTTP ${hit2.status}`);
     ok('重存后返回的是新内容', (await hit2.text()) === CONTENT + '#v2\n');

@@ -653,6 +653,20 @@ check('点「停止」后消息标记为已中断', (await page.locator('text=�
 check('中断不报错（不出现「对话失败」）', (await page.locator('text=对话失败').count()) === 0);
 await page.unroute('**/ai/assistant/stream');
 
+// ---- 15. 登录页：品牌副标题与标签页标题（2026-10-11 统一成 AI · SUBSCRIPTION）----
+// 必须另开一个**不带令牌**的上下文：主上下文已注入 sp_token，进去会被直接放行到首页。
+{
+    const anon = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const lp = await anon.newPage();
+    await lp.goto(`${BASE}/#/`, { waitUntil: 'domcontentloaded' });
+    await lp.waitForTimeout(1500);
+    const title = await lp.title();
+    check('标签页标题是 SubPilot · AI · SUBSCRIPTION', title === 'SubPilot · AI · SUBSCRIPTION', title);
+    check('登录页副标题已改为 AI · SUBSCRIPTION', (await lp.locator('text=AI · SUBSCRIPTION').count()) >= 1);
+    check('登录页不再出现旧副标题 SubConverter-Extended 控制台', (await lp.locator('text=SubConverter-Extended 控制台').count()) === 0);
+    await anon.close();
+}
+
 // ---- 收尾：清掉本次验证新增的分享码 ----
 // 不删的话每跑一次就多一条（7 天有效期），既占 900 条配额，
 // 又会让 shots.mjs 的「非演示数据」守门把整轮截图拦下来。

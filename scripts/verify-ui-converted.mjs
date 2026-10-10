@@ -141,11 +141,15 @@ if (await card.count()) {
     ok('卡片仍有「⤓ 下载」', flat.includes('下载'));
     ok('卡片仍有「删除」', flat.includes('删除'));
 
-    // 点「分享链接」真的把 /share/converted 链接放进剪贴板
+    // 点「分享链接」真的把**成品链接**（转换后端格式的快照链）放进剪贴板 ——
+    // 2026-10-11 起卡片复制的就是这条，与推给 TG 的那条由后端同一函数产出。
     await card.locator('button', { hasText: '分享链接' }).first().click();
     await page.waitForTimeout(400);
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    ok('复制的是 /share/converted 完整链接', /\/share\/converted\/.+\?code=.+/.test(clip), clip.slice(0, 60) + '…');
+    ok('复制的是 /sub?… 形状的成品链接（带后端域名）', /^https?:\/\/.+\/sub\?/.test(clip), clip.slice(0, 80) + '…');
+    ok('成品链接带 target=', /[?&]target=/.test(clip), clip.slice(0, 80) + '…');
+    ok('成品链接的 url= 指向该成品自身的快照', clip.includes('%2Fshare%2Fconverted%2F'), clip.slice(0, 120) + '…');
+    ok('成品链接上没有任何来源标记', !/[?&]src=/.test(clip), clip.slice(0, 80) + '…');
 }
 
 // ---- 收尾：删成品（后端连带回收它的分享码）+ 删播种的订阅 ----

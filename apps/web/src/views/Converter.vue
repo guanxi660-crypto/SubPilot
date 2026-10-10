@@ -300,8 +300,8 @@
                         <TgPushButton compact kind="converted" :name="c.name" :label="c.name" />
                         <button
                             class="btn-ghost !py-0.5 !px-2 !text-[11px] whitespace-nowrap shrink-0"
-                            :disabled="!c.shareCode"
-                            :title="c.shareCode ? '复制分享链接' : '分享链接生成中，稍后刷新'"
+                            :disabled="!c.link && !c.shareCode"
+                            :title="c.link ? '复制成品链接（转换后端格式）' : c.shareCode ? '复制分享链接' : '分享链接生成中，稍后刷新'"
                             @click="copyCard(c)"
                         >{{ copied === c.name ? '✓ 已复制' : '⧉ 分享链接' }}</button>
                         <button
@@ -674,18 +674,28 @@ async function downloadCard(c) {
 }
 
 /**
- * 成品的固定分享链接。
- *
- * 链接是「保存即定下、之后永不变」的 —— 码由后端在保存时自动生成并挂到列表项上，
- * 所以这里没有任何「生成 / 刷新」动作，只有展示与复制。
+ * 成品的固定分享链接（/share/converted/…?code=）—— 快照直链。
+ * 仅在后端没下发 `link` 时兜底（老数据 / 后端地址缺失）。
  */
 function convertedShareUrl(c) {
     return shareUrl({ type: 'converted', name: c.name, code: c.shareCode });
 }
 
+/**
+ * 成品卡片上「⧉ 分享链接」复制的那条地址。
+ *
+ * 优先用后端下发的 `link` —— 那是**成品链接**（转换后端格式的快照链
+ * `<后端>/sub?target=…&url=<成品快照>&config=…`）。它与推给 TG 的那条
+ * 由后端同一个函数产出，所以卡片上复制的和推出去的是同一条地址。
+ * 后端没给（老成品 / 未配置后端）时才退回快照直链。
+ */
+function convertedLink(c) {
+    return c.link || convertedShareUrl(c);
+}
+
 async function copyCard(c) {
     try {
-        await navigator.clipboard.writeText(convertedShareUrl(c));
+        await navigator.clipboard.writeText(convertedLink(c));
         copied.value = c.name;
         setTimeout(() => {
             if (copied.value === c.name) copied.value = '';

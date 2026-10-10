@@ -509,6 +509,49 @@ export async function handleConvertLink(request, env, ctx, { query }) {
     });
 }
 
+/**
+ * 成品的「成品链接」—— 转换后端格式的**快照链**（用户 2026-10-11 指定）。
+ *
+ * 形如 `<转换后端>/sub?target=<成品格式>&url=<成品自身的快照地址>&config=<模板>`。
+ *
+ * 为什么让后端再转一次「已经转好的成品」：成品卡片上要展示 / 复制的链接、以及
+ * 推给 TG 的那条链接，都必须是**带后端域名**的 `/sub` 形状（客户端认这个），
+ * 而 `url=` 指向的是该成品自己的 /share/converted 快照 —— 后端拉到的是快照本身，
+ * 所以内容仍然固定在保存那一刻，不会跟着原始订阅漂移。
+ * 换句话说「成品 = 快照」的语义没变，只是把交付通道换成了后端。
+ *
+ * 实测（默认后端，2026-10-11）：把一份 clash 快照当输入交给 SCE，
+ * target=singbox / shadowrocket 会把节点内联出来；target=clash 输出
+ * provider 形态 —— 这与普通 URI 列表输入的表现完全一致，不是快照特有的问题。
+ *
+ * 拿不到分享码（老数据）或没有对外基地址时返回 ''，调用方退回 /share 直链。
+ *
+ * @param {{env:object, snap:object, item:{name:string,target?:string,template?:string},
+ *          base?:string, code?:string}} o
+ *        base = 对外基地址（publicBase 的结果）；code 可显式传入（刚新建、快照还没刷新时）
+ */
+export function convertedBackendLink({ env, snap, item, base, code }) {
+    const name = String(item?.name || '').trim();
+    const origin = String(base || '').replace(/\/+$/, '');
+    if (!name || !origin) return '';
+    const c =
+        code ||
+        (snap?.shares || []).find((s) => s.type === 'converted' && s.name === name)?.code ||
+        '';
+    if (!c) return '';
+    // target=raw 不是 SCE 认的目标格式（raw 是本站本地直出），退回默认格式
+    const target =
+        item?.target && item.target !== 'raw'
+            ? item.target
+            : snap?.settings?.defaultTarget || 'clash';
+    const params = {
+        target,
+        url: `${origin}/share/converted/${encodeURIComponent(name)}?code=${c}`,
+    };
+    if (item?.template) params.config = String(item.template);
+    return buildSceUrl(resolveBackend(env, snap?.settings), params);
+}
+
 /** 透传少量对 SCE 有意义的请求头（provider_headers 会用到） */
 function pickForwardHeaders(request) {
     const out = {};
@@ -630,9 +673,6 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
     q.delete('ft');
     q.delete('code');
     q.delete('spec');
-    // src 是我们自己加的来源标记（目前只有 TG 推送会带 src=tg），
-    // 对下游参数解析没有任何意义 —— 删掉，别让它混进 SCE 参数里。
-    q.delete('src');
 
     let pullName = name;
     if (isAdhoc) {
@@ -673,10 +713,8 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
     const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth });
 
     // 统计只记成功分发（失败也记的话会污染「拉取次数」这个指标）。
-    // src=tg 的请求跳过：那是 Telegram 给消息里的链接抓预览时打进来的
-    //（链接由 telegram.js 的 tgMarked 打标），不是真的有人在拉订阅 ——
-    // 记进去会让「分发统计」凭空多出 TG 的条目。详见 telegram.js 的 tgMarked。
-    if (res.ok && ctx?.waitUntil && !isTgCrawler(query)) {
+    // Telegram 抓链接预览的那一跳跳过 —— 见 isTgCrawler。
+    if (res.ok && ctx?.waitUntil && !isTgCrawler(request)) {
         ctx.waitUntil(
             recordPull(env, {
                 type: isAdhoc ? '分发多来源' : isCollection ? '组合' : '订阅',
@@ -689,14 +727,28 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
 }
 
 /**
- * 这次请求是不是 Telegram 抓链接预览打进来的。
+ * 这次请求是不是 Telegram 服务器抓链接预览打进来的。
  *
- * 判据只有一条：链接里带我们自己的 `src=tg` 标记（telegram.js 的 tgMarked）。
- * **刻意不认 UA / 出口 IP** —— UA 谁都能伪造、TG 的网段也会变，认它们就是猜；
- * 标记是确定性的，且只影响统计口径，没有任何鉴权含义。
+ * 为什么认 UA：TG 收到带链接的消息后会**自己去抓一次**那条地址做预览
+ * （telegram.js 的 sendMessage 传了 disable_web_page_preview: false），那一跳会
+ * 打进 /download 或 /share —— 于是「分发统计」里凭空多出一条 TG 的拉取记录，
+ * 看起来像有人真拉过这个订阅。推送这个动作本身不该产生分发记录。
+ *
+ * 为什么不再用 URL 标记：此前把 `src=tg` 写进推送链接里做判据，用户明确否掉了
+ * ——「原链接是什么推送什么」。所以推送链接现在逐字就是分发链接本身，
+ * 只能从请求特征上认。TG 的预览爬虫自报 `TelegramBot (like TwitterBot)`
+ * （见 knownagents.com/agents/telegrambot），这个 UA 是它公开的标识。
+ *
+ * 口径边界（刻意如此）：
+ *   · UA 可以伪造 —— 但这里只影响统计计数，没有任何鉴权含义，伪造它没有收益；
+ *   · 真人从 TG 里点开 / 把链接粘进客户端的拉取**会**正常计入统计
+ *     （旧标记方案会把这一部分也一并算成「TG 的」，其实更不准）；
+ *   · 成品推送的链接指向**转换后端**，后端再回拉我们的快照 —— 那一跳我们看到的
+ *     UA 是后端的，认不出来。也就是说成品的预览抓取仍会留下一条记录。
  */
-function isTgCrawler(query) {
-    return query.get('src') === 'tg';
+function isTgCrawler(request) {
+    const ua = request?.headers?.get?.('user-agent') || '';
+    return /\bTelegramBot\b/i.test(ua);
 }
 
 // ---------------------------------------------------------------- /share
@@ -739,7 +791,7 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     if (kind === 'file') {
         const f = snap.files.find((x) => x.name === name);
         if (!f) return fail('分享链接无效或已过期', 403);
-        if (ctx?.waitUntil && !isTgCrawler(query)) {
+        if (ctx?.waitUntil && !isTgCrawler(request)) {
             ctx.waitUntil(
                 recordPull(env, { type: '分享文件', item: name, ip: clientIp(request) }).catch(() => {}),
             );
@@ -763,7 +815,7 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     if (kind === 'converted') {
         const c = snap.converted.find((x) => x.name === name);
         if (!c) return fail('分享链接无效或已过期', 403);
-        if (ctx?.waitUntil && !isTgCrawler(query)) {
+        if (ctx?.waitUntil && !isTgCrawler(request)) {
             ctx.waitUntil(
                 recordPull(env, { type: '分享成品', item: name, ip: clientIp(request) }).catch(() => {}),
             );
@@ -776,8 +828,6 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     // sub / col
     const q = new URLSearchParams(query);
     q.delete('code');
-    // src 只是来源标记（TG 推送会带 src=tg），对下游参数解析没有意义，删掉
-    q.delete('src');
     if (kind === 'sub') q.set('sub', name);
     else q.set('collection', name);
 
@@ -786,7 +836,7 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     q.set('target', 'raw');
 
     const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth: '' });
-    if (res.ok && ctx?.waitUntil && !isTgCrawler(query)) {
+    if (res.ok && ctx?.waitUntil && !isTgCrawler(request)) {
         ctx.waitUntil(
             recordPull(env, {
                 type: kind === 'sub' ? '分享订阅' : '分享组合',

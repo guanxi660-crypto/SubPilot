@@ -20,7 +20,7 @@
 
 import { fail, ok, nowIso, randId, maskSecret } from './util.js';
 import { loadSnapshot, mutate } from './storage.js';
-import { buildLinks, publicBase } from './convert.js';
+import { buildLinks, publicBase, convertedBackendLink } from './convert.js';
 import { TARGET_LABEL } from './sce.js';
 
 const TG_API = 'https://api.telegram.org';
@@ -173,36 +173,22 @@ function findTarget(snap, kind, name) {
 /** 走分享码通道的类型（没有 HMAC 派生密钥，只能靠一次性分享码分发） */
 const SHARE_KINDS = new Set(['file', 'converted']);
 
-/**
- * 给推送链接打上「来源 = Telegram」的内部标记。
- *
- * 为什么需要它：TG 收到带链接的消息后会**自己去抓一次**这条地址做预览
- * （下面的 sendMessage 传了 disable_web_page_preview: false），那一跳会打进
- * /download 或 /share —— 于是「分发统计」里凭空多出一条 TG 的拉取记录，
- * 看起来像是有人真拉过这个订阅。用户要的是「推送出去」这个动作本身不产生分发记录。
- *
- * 为什么用标记而不是认 UA / 出口 IP：UA 谁都能伪造，TG 的出口网段也会变，
- * 认它们就是猜；而标记是我们自己写进链接里的，判据是确定的（见 convert.js 里
- * handleDownload / handleShare 读 src 的那两处）。
- *
- * 代价：用户如果把 TG 里那条链接原样粘进客户端，那部分拉取也不计入统计 ——
- * 这正是「TG 推出去的那一份」的语义，符合预期。
- */
-export function tgMarked(url) {
-    if (!url) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}src=tg`;
-}
-
 // ---------------------------------------------------------------- 链接生成
 
 /**
  * 生成某个目标的只读分发链接。
  *
  * 订阅 / 组合：走 buildLinks → /download/…?ft=派生密钥，无状态、不吃分享码配额。
- * 文件 / 成品：没有派生密钥通道，复用 /share/<type>/…?code=。优先复用已有的、未过期的
+ * 文件：没有派生密钥通道，复用 /share/file/…?code=。优先复用已有的、未过期的
  *       分享码，没有才新建一个永久有效的 —— 否则每推一次就多一条分享码，
  *       900 条上限会被慢慢吃光。
+ * 成品：推的是**成品链接**（转换后端格式的快照链，见 convert.js 的
+ *       convertedBackendLink）—— 与成品卡片上「⧉ 分享链接」复制出来的那条
+ *       逐字一致。它同样以快照的分享码为基底，所以这里仍要先拿到 / 建好分享码。
+ *
+ * ⚠️ 推送链接一律**原样**，绝不在 URL 上附加任何来源标记 —— 用户明确要求
+ * 「原链接是什么推送什么」。统计侧要跳过 TG 抓预览的那一跳，只能认请求特征
+ * （见 convert.js 的 isTgCrawler）。
  *
  * @param {string} base 对外基地址（已剥掉尾部斜杠）
  * @returns {Promise<{url: string, created: boolean}>}
@@ -230,16 +216,20 @@ async function targetLink(env, snap, { kind, name, linkType, base }) {
                 });
             });
         }
-        return {
-            url: tgMarked(`${base}/share/${kind}/${encodeURIComponent(name)}?code=${code}`),
-            created,
-        };
+        if (kind === 'converted') {
+            // snap 是 mutate 之前的那份，新码还没写进去 —— 显式把 code 传下去
+            const item = asList(snap.converted).find((c) => c.name === name);
+            const url = convertedBackendLink({ env, snap, item: item || { name }, base, code });
+            if (url) return { url, created };
+            // 拿不到后端地址时退回快照直链（resolveBackend 有兜底，正常走不到这里）
+        }
+        return { url: `${base}/share/${kind}/${encodeURIComponent(name)}?code=${code}`, created };
     }
 
     // buildLinks 只从 request 里取 base（settings.publicBaseUrl 优先，否则 request.url），
     // 这里已经算好 base 了，用一个最小 shim 传进去即可，不必复制一份 base 推导逻辑。
     const links = await buildLinks({ url: `${base}/` }, env, snap, { kind, name, target: linkType });
-    return { url: tgMarked(links.link), created: false };
+    return { url: links.link, created: false };
 }
 
 // ---------------------------------------------------------------- 消息渲染

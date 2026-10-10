@@ -10,7 +10,7 @@
                 />
                 <div>
                     <div class="text-xl font-bold brand-gradient leading-none">SubPilot</div>
-                    <div class="text-[11px] text-slate-500 mt-1">SubConverter-Extended 控制台</div>
+                    <div class="text-[11px] text-slate-500 mt-1">AI · SUBSCRIPTION</div>
                 </div>
             </div>
 

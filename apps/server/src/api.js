@@ -28,7 +28,7 @@ import {
 import { loadSnapshot, mutate, loadStats, clearStats, MAX_STATS_ITEMS } from './storage.js';
 import { resolveBackend, probeBackend, SCE_TARGETS } from './sce.js';
 import { runPipeline, previewText, fetchSubText } from './pipeline.js';
-import { buildLinks, resolveSourceRefs, adhocSpec } from './convert.js';
+import { buildLinks, resolveSourceRefs, adhocSpec, publicBase, convertedBackendLink } from './convert.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
 import { handleTemplates, sanitizeProcess } from './templates.js';
 // 版本号单一事实来源 = apps/server/package.json。
@@ -140,14 +140,30 @@ function ensureConvertedShare(s, name) {
 }
 
 /**
- * 给成品列表项补上 `shareCode`。
+ * 给成品列表项补上 `shareCode` 与 `link`。
  *
- * 前端要的是「卡片上直接显示链接」，所以码必须跟着列表一起来 ——
+ * 前端要的是「卡片上直接显示 / 复制链接」，所以两者必须跟着列表一起来 ——
  * 否则每渲染一次卡片都得再拉一遍 /api/shares，多一次往返还容易读到旧快照。
+ *
+ * `link` 是**成品链接**（转换后端格式的快照链，见 convert.js 的
+ * convertedBackendLink），也就是成品卡片上「⧉ 分享链接」复制出来的那条；
+ * TG 推送成品时用的是同一个函数产出的地址，两边不可能漂移。
  */
-function withShareCode(snap, { content, ...rest }) {
+function withShareCode(snap, { content, ...rest }, { request, env } = {}) {
     const hit = (snap.shares || []).find((sh) => sh.type === 'converted' && sh.name === rest.name);
-    return { ...rest, size: fileBytes(content), shareCode: hit?.code || '' };
+    const shareCode = hit?.code || '';
+    return {
+        ...rest,
+        size: fileBytes(content),
+        shareCode,
+        link: convertedBackendLink({
+            env,
+            snap,
+            item: rest,
+            base: publicBase(request, snap.settings),
+            code: shareCode,
+        }),
+    };
 }
 
 /** 对外暴露设置时抹掉密钥，只回 has* 标记 */
@@ -600,9 +616,9 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 const { snap: s2 } = await mutate(env, (s) => {
                     for (const c of s.converted) ensureConvertedShare(s, c.name);
                 });
-                return ok(s2.converted.map((c) => withShareCode(s2, c)));
+                return ok(s2.converted.map((c) => withShareCode(s2, c, { request, env })));
             }
-            return ok(snap.converted.map((c) => withShareCode(snap, c)));
+            return ok(snap.converted.map((c) => withShareCode(snap, c, { request, env })));
         }
         if (method === 'POST') {
             const name = String(body.name || '').trim();
@@ -626,7 +642,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 // 保存即分发：链接在这一步就定下来，之后重转重存都不会变
                 ensureConvertedShare(s, name);
             });
-            return ok(snap.converted.map((c) => withShareCode(snap, c)), 201);
+            return ok(snap.converted.map((c) => withShareCode(snap, c, { request, env })), 201);
         }
         if (seg.length === 2) {
             const name = decodeURIComponent(seg[1]);
@@ -643,7 +659,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                     return {};
                 });
                 if (result.error) return fail(result.error, result.status || 404);
-                return ok(s2.converted.map((c) => withShareCode(s2, c)));
+                return ok(s2.converted.map((c) => withShareCode(s2, c, { request, env })));
             }
         }
     }

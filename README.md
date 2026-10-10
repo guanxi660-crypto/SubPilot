@@ -53,10 +53,10 @@ SCE 是无状态的：只有 `/sub`、`/version`、`/healthz` 等少数路由，
 | JSON 脚本 | 14 种算子组成链（筛选、重命名、排序、地区置顶、去重、国旗、限量…），内联在订阅 / 组合编辑页；内置「一键整理」模板 + 自定义模板 |
 | 组合 | 多个订阅合并为一个产出，可叠加组合层算子链 |
 | 文件 | 规则集 / 模板 / 片段；卡片：编辑 / 下载 / 生成链接 / 分享链接 / TG |
-| 转换 | 8 种目标格式（clash / sing-box / Shadowrocket / VLESS / Hysteria2 / Trojan / SS / SSR），生成分发链接与 feed 地址；多选来源同样有分发链接；成品可保存、下载、固定分享。产出卡还给一条**成品链接**——这次转换实际打到的后端地址（`<转换后端>/sub?target=…&url=…&config=…`，后端是哪台就是哪台），粘进浏览器即可复现同一次转换。外部配置 / 模板记住**上一次用过的地址**（自定义与预设都算），下次进来直接是它；「不套模板」是单次选择，不会覆盖 |
+| 转换 | 8 种目标格式（clash / sing-box / Shadowrocket / VLESS / Hysteria2 / Trojan / SS / SSR），生成分发链接与 feed 地址；多选来源同样有分发链接；成品可保存、下载、固定分享。产出卡还给一条**成品链接**——这次转换实际打到的后端地址（`<转换后端>/sub?target=…&url=…&config=…`，后端是哪台就是哪台），粘进浏览器即可复现同一次转换。外部配置 / 模板记住**上一次用过的地址**（自定义与预设都算），下次进来直接是它；「不套模板」是单次选择，不会覆盖。成品卡片上的「⧉ 分享链接」复制的、以及推给 TG 的成品链接，都是**同一条成品链接**（`<转换后端>/sub?target=…&url=<成品自身快照>&config=…`，由后端同一函数产出）—— 后端拉的是快照本身，内容仍固定在保存那一刻 |
 | AI 助手 | 描述需求生成 JSON 脚本，SSE 流式输出；提案可预览（跑一遍管线看结果）、保存、忽略 |
 | 同步 | Gist / WebDAV 备份恢复；Telegram 推送（Bot Token 只存服务端，接口只回掩码）。备份含订阅 / 组合 / 文件 / 成品 / 模板**与设置里的非凭据字段**（转换后端、公开地址、默认目标格式、AI Base URL 与模型、TG 推送目标）；**凭据不进备份**，换机后只需补填 AI Key / Gist Token / 网盘密码 / Bot Token |
-| 分发统计 | 记录 `/download/*` 与 `/share/*` 的拉取次数与来源 IP，可导出 CSV。**TG 推送出去的那条链接带 `src=tg` 标记，TG 抓预览与从 TG 里点开的拉取都不计入统计**（推送动作本身不该算一次分发）。条目上限 5000，超出按最近拉取时间淘汰最旧的一批，淘汰量在概览页可见 |
+| 分发统计 | 记录 `/download/*` 与 `/share/*` 的拉取次数与来源 IP，可导出 CSV。**TG 服务器抓链接预览的那一跳不计入统计**（推送动作本身不该算一次分发）——判据是请求 UA 含 `TelegramBot`，推送链接本身**不带任何来源标记，原链接是什么就推什么**。真人从 TG 里点开、或把链接粘进客户端的拉取照常计入。⚠️ 成品推送链接指向转换后端、由后端再回拉我们的快照，那一跳我们看到的 UA 是后端的，识别不了，仍会留下一条记录。条目上限 5000，超出按最近拉取时间淘汰最旧的一批，淘汰量在概览页可见 |
 
 ## 本地开发
 
@@ -85,12 +85,12 @@ node scripts/verify.mjs                  # 接口验证（检测到真实数据�
 node scripts/verify-security.mjs         # 53 项安全回归（常量时间比较 / 明文令牌 / 安全头 / 协议白名单）
 node scripts/verify-hardening.mjs        # 172 项加固回归（SSRF 逐跳复检 / 失败限流 / 正文上限 / 来源 IP / 设置备份 / 并发写）
 node scripts/verify-convert-link.mjs     # 48 项成品链接回归（后端格式 / host 跟随自定义后端 / 参数不漂移 / 与分发链接同一条 feed）
-node scripts/verify-tg-stats.mjs         # 24 项 TG 推送回归（推送链接带 src=tg / 带标记的拉取不计入分发统计 / 不影响分发内容）
+node scripts/verify-tg-stats.mjs         # 31 项 TG 推送回归（推送链接无来源标记 / 成品推的是后端格式快照链 / TelegramBot 抓预览不计统计而真人照常计）
 node scripts/verify-regions.mjs          # 56 项地区识别回归（纯函数）
 node scripts/verify-operators.mjs        # 11 项算子回归（纯函数）
 node scripts/verify-presets.mjs          # 104 条配置预设与 SubPilot-Archive 逐字一致
 node scripts/verify-storage.mjs          # 25 项存储层回归（直接开临时库，不走 HTTP）
-node scripts/verify-converted-share.mjs  # 30 项成品分享回归
+node scripts/verify-converted-share.mjs  # 36 项成品分享回归（含成品链接形状 / 快照 url= / 重存后 target 跟随）
 node scripts/verify-adhoc-link.mjs       # 20 项多来源分发回归
 node scripts/verify-ai.mjs               # 34 项 AI 链路回归（本机起假上游，不烧真 token）
 node scripts/verify-subedit-layout.mjs   # 订阅编辑页布局回归

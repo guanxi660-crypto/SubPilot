@@ -167,13 +167,9 @@ docker compose down
 完成后打开分配的 `*.workers.dev` 地址（或你绑定的自定义域），输入刚才填的
 `SUBPILOT_TOKEN` 登录。
 
-两点容易踩：
-
-- `wrangler.jsonc` 里的 `name` 必须与线上 Worker 一致 —— 改了名字 `wrangler deploy`
-  会**新建**一个 Worker，而自定义域仍指向旧的，表现为「部署成功但线上没变」。
-- **换自定义域名**：Dashboard → Worker → Settings → Domains & Routes 解绑 / 绑定即可。
-  注意已生成的客户端配置里嵌的是**当时请求的 host**，换域后旧的 `/feed/...`、`/download/...`
-  地址会失效，需要重新分发。
+**换自定义域名**：Dashboard → Worker → Settings → Domains & Routes 解绑 / 绑定即可。
+注意已生成的客户端配置里嵌的是**当时请求的 host**，换域后旧的 `/feed/...`、`/download/...`
+地址会失效，需要重新分发。
 
 ### 三、Node / 免费容器平台（zip 上传）
 

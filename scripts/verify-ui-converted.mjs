@@ -69,6 +69,11 @@ await api('/api/converted', {
         target: 'clash',
         template: '',
         content: 'proxies:\n  - {name: "UI-CANARY", type: vmess, server: ui.example.com, port: 443, uuid: 11111111-1111-1111-1111-111111111111, alterId: 0, cipher: auto}\n',
+        // 与真实保存流程一致：带上产出面板那条「成品链接」（活链）——
+        // 卡片复制 / TG 推送用的就是它（2026-10-10 改定，此前是快照链）。
+        backendUrl: `https://sce.example.test/sub?target=clash&url=${encodeURIComponent(
+            `tag:UI-CANARY,provider:UI-CANARY,${BASE}/feed/sub/${SUB_A}?ft=ui-canary-ft`,
+        )}`,
     }),
 });
 
@@ -93,10 +98,9 @@ const body = () => page.locator('body').innerText();
 ok('页面不再出现「预览链接（含管理令牌…）」', !(await body()).includes('含管理令牌'));
 ok('页面不再出现「仅本机排障用」', !(await body()).includes('仅本机排障用'));
 // 分发链接区是「有可用链接才显示」的 —— 刚进页面什么都没选，本就该是隐藏的
-// ⚠️ 判定锚点用「带派生只读密钥」而不是整句：那块文案后来改成了
-// 「订阅分发链接（编辑后的节点，不转换；带派生只读密钥，…）」，而脚本一直还在找
-// 旧串「分发链接（带派生只读密钥」—— 括号前多了一串字，永远匹配不上。
-// 于是下面两条断言恒真 / 恒假，「多选时分发链接消失」这个真正要守的回归反而失守了。
+// ⚠️ 判定锚点用「带派生只读密钥」而不是整句：那块文案改过两次，整句匹配必然漂。
+// 2026-10-10 起「订阅分发链接」一行不再显示（它和 feed 是同一条内容的两个寻址
+// 形态），这块只剩 feed 一条 URL —— 锚点文案保留在 feed 块的标签里。
 ok('未选来源时分发链接区隐藏', !(await body()).includes('带派生只读密钥'));
 
 // ---- [2] 多选来源时分发链接不能消失 ----
@@ -113,14 +117,14 @@ const subNames = ((await (await api('/api/subs')).json()).data || [])
 if (subNames.length >= 2) {
     await pick(subNames[0]);
     const withOne = await body();
-    ok('单选时分发链接出现', withOne.includes('带派生只读密钥'), '');
-    ok('单选时 feed 行出现', /feed：http/.test(withOne));
+    ok('单选时分发 feed 出现', withOne.includes('带派生只读密钥'), '');
+    ok('单选时 feed 行出现', /\nhttps?:\/\/[^\n]*\/feed\//.test(withOne));
 
     await pick(subNames[1]);
     const withTwo = await body();
-    ok('多选时分发链接不消失', withTwo.includes('带派生只读密钥'), '');
+    ok('多选时分发 feed 不消失', withTwo.includes('带派生只读密钥'), '');
     ok('多选时链接仍不含管理令牌', !/token=/.test(withTwo.match(/带派生只读密钥[^\n]*\n([^\n]+)/)?.[1] || ''));
-    ok('多选时 feed 行仍在', /feed：http/.test(withTwo));
+    ok('多选时 feed 行仍在', /\nhttps?:\/\/[^\n]*\/feed\//.test(withTwo));
 
     // 清掉选择，回到空态
     await pick(subNames[0]);
@@ -141,14 +145,22 @@ if (await card.count()) {
     ok('卡片仍有「⤓ 下载」', flat.includes('下载'));
     ok('卡片仍有「删除」', flat.includes('删除'));
 
-    // 点「分享链接」真的把**成品链接**（转换后端格式的快照链）放进剪贴板 ——
+    // 点「分享链接」真的把**成品链接**（活链 —— 保存时存下的那条后端地址）放进剪贴板 ——
     // 2026-10-10 起卡片复制的就是这条，与推给 TG 的那条由后端同一函数产出。
     await card.locator('button', { hasText: '分享链接' }).first().click();
     await page.waitForTimeout(400);
     const clip = await page.evaluate(() => navigator.clipboard.readText());
+    const clipInner = (() => {
+        try {
+            return new URL(clip).searchParams.get('url') || '';
+        } catch {
+            return '';
+        }
+    })();
     ok('复制的是 /sub?… 形状的成品链接（带后端域名）', /^https?:\/\/.+\/sub\?/.test(clip), clip.slice(0, 80) + '…');
     ok('成品链接带 target=', /[?&]target=/.test(clip), clip.slice(0, 80) + '…');
-    ok('成品链接的 url= 指向该成品自身的快照', clip.includes('%2Fshare%2Fconverted%2F'), clip.slice(0, 120) + '…');
+    ok('成品链接是保存时存下的那条活链（url= 指向本站 /feed）', clipInner.includes('/feed/sub/'), clip.slice(0, 120) + '…');
+    ok('成品链接不再是快照链（url= 不指向 /share/converted）', !clipInner.includes('/share/converted/'), clipInner.slice(0, 100) + '…');
     ok('成品链接上没有任何来源标记', !/[?&]src=/.test(clip), clip.slice(0, 80) + '…');
 }
 

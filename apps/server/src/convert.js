@@ -510,36 +510,33 @@ export async function handleConvertLink(request, env, ctx, { query }) {
 }
 
 /**
- * 成品的「成品链接」—— 转换后端格式的**快照链**（用户 2026-10-10 指定）。
+ * 成品的「成品链接」—— **活链**（用户 2026-10-10 改定，此前是快照链）。
  *
- * 形如 `<转换后端>/sub?target=<成品格式>&url=<成品自身的快照地址>&config=<模板>`。
+ * ① 新成品：保存那一刻把「这次转换实际打到的后端地址」（handleConvertLink 的
+ *    产出，也就是产出面板显示的那条）整个存进 item.backendUrl，这里**原样返回**。
+ *    为什么存整条 URL 而不是存参数再拼：链接里带着保存那一刻的完整参数
+ *    （tag:/provider: 前缀、/feed 活链地址、emoji 等），原样返回 = 不可能走样；
+ *    且它与产出面板那条逐字一致 —— 「卡片复制的 = 面板显示的 = 推给 TG 的」。
+ *    url= 指向 /feed 活链，内容跟随订阅更新 —— 这也顺带修掉了 clash 成品
+ *    快照链 0 节点的问题（provider 要的是节点列表，快照里存的是一份
+ *    只有 proxy-providers/proxy-groups 的完整配置，解析不出节点）。
  *
- * 为什么让后端再转一次「已经转好的成品」：成品卡片上要展示 / 复制的链接、以及
- * 推给 TG 的那条链接，都必须是**带后端域名**的 `/sub` 形状（客户端认这个），
- * 而 `url=` 指向的是该成品自己的 /share/converted 快照 —— 后端拉到的是快照本身，
- * 所以内容仍然固定在保存那一刻，不会跟着原始订阅漂移。
- * 换句话说「成品 = 快照」的语义没变，只是把交付通道换成了后端。
+ * ② 老成品（该字段上线前保存的）没有存的活链，退回**快照链**
+ *    `<转换后端>/sub?target=<成品格式>&url=<成品自身的快照>&config=<模板>` ——
+ *    来源已无从重建，只能指向快照（clash 目标下它仍是 0 节点，重存一次即升级为活链）。
  *
- * 实测（默认后端，2026-10-10）：把一份 clash 快照当输入交给 SCE，
- * target=singbox / shadowrocket 会把节点内联出来；target=clash 输出
- * provider 形态 —— 这与普通 URI 列表输入的表现完全一致，不是快照特有的问题。
+ * 两条退路（快照链拿不到分享码 / 没有对外基地址）返回 ''，调用方退回 /share 直链。
  *
- * ⚠️ 已知风险：SCE 对 clash 目标的输出**不含任何节点**（只有 `proxy-providers:`
- * 指向输入 URL，没有 `proxies:`）—— 而 SubPilot 对 clash 系 target 本来就会加
- * `tag:/provider:` 前缀（见 decorateSourceUrl），所以 clash 成品的 `content`
- * 本身就是一份 provider 配置。把这样一份成品再当输入喂回后端，能不能解析出
- * 东西取决于 SCE 对 `proxy-providers` 的处理，**尚未完成往返验证**（后端探活
- * 时它持续 500）。若实测发现 clash 成品链接打不开，退路是改用「活链」
- * （`url=` 直接指向原始来源，而不是成品快照）。
- *
- * 拿不到分享码（老数据）或没有对外基地址时返回 ''，调用方退回 /share 直链。
- *
- * @param {{env:object, snap:object, item:{name:string,target?:string,template?:string},
+ * @param {{env:object, snap:object, item:{name:string,target?:string,template?:string,backendUrl?:string},
  *          base?:string, code?:string}} o
  *        base = 对外基地址（publicBase 的结果）；code 可显式传入（刚新建、快照还没刷新时）
  */
 export function convertedBackendLink({ env, snap, item, base, code }) {
     const name = String(item?.name || '').trim();
+    // ① 保存时存下的活链 —— 原样返回，绝不重写（改一个字符都可能让它失效）
+    const saved = String(item?.backendUrl || '').trim();
+    if (saved) return saved;
+    // ② 老成品退路：快照链
     const origin = String(base || '').replace(/\/+$/, '');
     if (!name || !origin) return '';
     const c =

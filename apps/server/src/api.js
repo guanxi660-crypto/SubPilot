@@ -145,7 +145,7 @@ function ensureConvertedShare(s, name) {
  * 前端要的是「卡片上直接显示 / 复制链接」，所以两者必须跟着列表一起来 ——
  * 否则每渲染一次卡片都得再拉一遍 /api/shares，多一次往返还容易读到旧快照。
  *
- * `link` 是**成品链接**（转换后端格式的快照链，见 convert.js 的
+ * `link` 是**成品链接**（活链 —— 保存时存下的那条后端地址，见 convert.js 的
  * convertedBackendLink），也就是成品卡片上「⧉ 分享链接」复制出来的那条；
  * TG 推送成品时用的是同一个函数产出的地址，两边不可能漂移。
  */
@@ -627,12 +627,21 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
             if (typeof body.content !== 'string' || !body.content) return fail('成品内容为空', 400);
             const bytes = new TextEncoder().encode(body.content).length;
             if (bytes > 16 * 1024 * 1024) return fail('成品内容超过 16MiB 上限', 413);
+            // 活链（2026-10-10 改定）：前端把产出面板那条「成品链接」（这次转换实际
+            // 打到的后端地址）随保存一起交上来存住 —— 卡片复制 / TG 推送都原样用它，
+            // 三处同源。可空（target=raw 没有后端链接）；重存不带它视为清空。
+            const backendUrl = String(body.backendUrl || '').trim();
+            if (backendUrl) {
+                if (!/^https?:\/\//i.test(backendUrl)) return fail('成品链接必须是 http(s) 地址', 400);
+                if (backendUrl.length > 4096) return fail('成品链接超过 4096 字符上限', 400);
+            }
             const { snap } = await mutate(env, (s) => {
                 const idx = s.converted.findIndex((c) => c.name === name);
                 const item = {
                     name,
                     target: String(body.target || ''),
                     template: String(body.template || ''),
+                    backendUrl,
                     content: body.content,
                     createdAt: idx >= 0 ? s.converted[idx].createdAt : nowIso(),
                     updatedAt: nowIso(),

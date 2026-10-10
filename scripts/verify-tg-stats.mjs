@@ -4,9 +4,10 @@
 //   ① 「推送给 TG 的链接不应该有 &src=tg，原链接是什么推送什么」——
 //      推送正文里的链接必须与分发链接**逐字相同**，URL 上不许附加任何来源标记。
 //      此前用 `src=tg` 做「TG 抓预览不计统计」的判据，那个方案已被否掉。
-//   ② 「推送给 TG 的成品链接应该是成品链接（转换后端格式）」——
-//      成品的推送链接 = `<转换后端>/sub?target=…&url=<成品自身快照>&config=…`，
-//      与成品卡片上「⧉ 分享链接」复制出来的那条由后端同一函数产出。
+//   ② 「推送给 TG 的成品链接应该是成品链接（活链）」——
+//      2026-10-10 晚改定：保存成品时把产出面板那条后端地址（活链）原样存下来，
+//      推送 / 卡片复制都原样用它；老成品（没存活链）退回快照链。
+//      两条路径都由 convertedBackendLink 产出，与卡片复制不可能漂移。
 //
 // 统计侧改判据后仍要保证：TG 服务器抓预览的那一跳不计入分发统计，
 // 而**真人**的拉取照常计入（旧标记方案会把真人从 TG 点开的也一并抹掉）。
@@ -167,7 +168,7 @@ ok(
     fileUrl,
 );
 
-// ---- 核心断言 ②：成品推的是「成品链接」（转换后端格式的快照链）----
+// ---- 核心断言 ②：成品推的是「成品链接」（活链 —— 保存时存下的那条后端地址）----
 const convItem = freshSnap.converted.find((c) => c.name === CONV);
 const convCode = (freshSnap.shares || []).find((s) => s.type === 'converted' && s.name === CONV)?.code || '';
 ok('推送时为成品建好了分享码', !!convCode, convCode || '(空)');
@@ -177,11 +178,23 @@ ok('成品推送链接 = convertedBackendLink 的产出（与卡片复制同源�
 ok('成品链接带后端域名（不是本站域名）', convUrl.startsWith(`${SCE}/sub?`), convUrl.slice(0, 60));
 ok('成品链接带 target=<成品格式>', convUrl.includes('target=clash'), convUrl);
 ok('成品链接带 config=<模板>', convUrl.includes(`config=${encodeURIComponent(convItem.template)}`), convUrl);
-ok('成品链接的 url= 指向成品自身的快照', new URL(convUrl).searchParams.get('url') === `${PUB}/share/converted/${encodeURIComponent(CONV)}?code=${convCode}`, String(new URL(convUrl).searchParams.get('url')));
+ok('成品链接的 url= 指向成品自身的快照（老成品退路）', new URL(convUrl).searchParams.get('url') === `${PUB}/share/converted/${encodeURIComponent(CONV)}?code=${convCode}`, String(new URL(convUrl).searchParams.get('url')));
 
-// ---- 边界：拿不到分享码时不产出链接（老数据兜底）----
+// 2026-10-10 起的主路径：保存时存了**活链**的成品，推送 / 卡片复制都原样用它 ——
+// 不重写一个字符（改一个字符都可能让它失效），也不再依赖分享码。
+const LIVE = `${SCE}/sub?target=clash&url=${encodeURIComponent(`${PUB}/feed/sub/${SUB}?ft=tgstatsft`)}`;
 ok(
-    '没有分享码时不产出成品链接（调用方退回 /share 直链）',
+    '存了活链的成品：convertedBackendLink 原样返回它',
+    convertedBackendLink({ env, snap: freshSnap, item: { ...convItem, backendUrl: LIVE }, base: PUB, code: convCode }) === LIVE,
+);
+ok(
+    '存了活链的成品：没有分享码也产得出链接',
+    convertedBackendLink({ env, snap: { ...freshSnap, shares: [] }, item: { ...convItem, backendUrl: LIVE }, base: PUB }) === LIVE,
+);
+
+// ---- 边界：老成品（没存活链）拿不到分享码时不产出链接 ----
+ok(
+    '老成品没有分享码时不产出成品链接（调用方退回 /share 直链）',
     convertedBackendLink({ env, snap: { ...freshSnap, shares: [] }, item: convItem, base: PUB }) === '',
 );
 ok('没有对外基地址时不产出成品链接', convertedBackendLink({ env, snap: freshSnap, item: convItem, base: '' }) === '');

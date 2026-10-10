@@ -231,7 +231,9 @@
             <!-- 成品链接：这次转换**实际打到的那条后端地址**，原样保留后端的参数格式
                  （<转换后端>/sub?target=…&url=…&config=…）。后端是哪台就用哪台 ——
                  部署默认的或设置里自定义的那台，不重写成 SubPilot 自己的形态。
-                 点「转换」后才有（它只依赖参数，所以转换失败时也照样给）。 -->
+                 点「转换」后才有（它只依赖参数，所以转换失败时也照样给）。
+                 「保存成品」会把这条**原样**存进成品 —— 之后成品卡片复制 / TG 推送
+                 用的就是它，三处逐字一致（活链，内容跟随订阅更新）。 -->
             <div v-if="result.backendUrl" class="mt-3 bg-panel2 rounded-xl p-3">
                 <div class="text-[11px] text-accent2">
                     成品链接（转换后端格式 · {{ result.backendHost || '未配置后端' }}）
@@ -239,14 +241,13 @@
                 <div class="text-xs font-mono break-all mt-1.5">{{ result.backendUrl }}</div>
             </div>
 
-            <div v-if="shareLink" class="mt-3 bg-panel2 rounded-xl p-3">
+            <!-- 只显示 feed（2026-10-10 用户指定）：它和「订阅分发链接」是同一条内容的
+                 两个寻址形态（/download 与 /feed 同一套派生密钥），摆两行只添乱。 -->
+            <div v-if="feedUrl" class="mt-3 bg-panel2 rounded-xl p-3">
                 <div class="text-[11px] text-emerald-300/90">
-                    订阅分发链接（编辑后的节点，不转换；带派生只读密钥，可直接发给别人 / 粘进客户端）
+                    订阅分发 feed（编辑后的节点，不转换；带派生只读密钥，可直接发给别人 / 粘进客户端）
                 </div>
-                <div class="text-xs font-mono break-all mt-1.5">{{ shareLink }}</div>
-                <div v-if="feedUrl" class="text-[11px] text-slate-600 font-mono break-all mt-1.5">
-                    feed：{{ feedUrl }}
-                </div>
+                <div class="text-xs font-mono break-all mt-1.5">{{ feedUrl }}</div>
             </div>
 
             <!-- 预览链接（带管理令牌）不在这里显示：它是排障用的，摆出来容易被误当成可外发的地址。
@@ -405,8 +406,7 @@ const result = reactive({
     backendHost: '',
 });
 const save = reactive({ open: false, name: '', busy: false });
-/** 可外发的分发链接（带派生只读密钥，不含管理令牌） */
-const shareLink = ref('');
+/** 订阅分发 feed（带派生只读密钥，不含管理令牌）—— 与 /download 分发链接同内容，只显示这一条 */
 const feedUrl = ref('');
 
 /**
@@ -543,7 +543,6 @@ function refreshLink() {
     const extra = form.url.split(/[\r\n|]+/).map((x) => x.trim()).filter(Boolean);
     const total = subNames.length + colNames.length + extra.length;
     if (!total) {
-        shareLink.value = '';
         feedUrl.value = '';
         return;
     }
@@ -556,18 +555,16 @@ function refreshLink() {
         if (form.target) q.set('target', form.target);
         api(`/api/link?${q.toString()}`)
             .then((res) => {
-                shareLink.value = res.data.link;
                 feedUrl.value = res.data.feedUrl;
             })
             .catch(() => {
-                shareLink.value = '';
                 feedUrl.value = '';
             });
         return;
     }
 
     // 多来源：选择本身没有名字可以寻址，后端把它折成一个 adhoc spec 再走同一套派生密钥。
-    // 以前这里直接把 shareLink / feedUrl 清空 —— 表现成「多选几个订阅，分发链接整个消失」，
+    // 以前这里直接把 feedUrl 清空 —— 表现成「多选几个订阅，分发链接整个消失」，
     // 用户手里就只剩下带管理令牌的预览链接，等于没法把多来源的结果发出去。
     //
     // 来源取舍必须和 buildParams 完全一致：混选时组合被丢弃（那边有警告提示），
@@ -578,11 +575,9 @@ function refreshLink() {
     };
     api('/api/link', { method: 'POST', body: JSON.stringify(body) })
         .then((res) => {
-            shareLink.value = res.data.link;
             feedUrl.value = res.data.feedUrl;
         })
         .catch(() => {
-            shareLink.value = '';
             feedUrl.value = '';
         });
 }
@@ -684,10 +679,10 @@ function convertedShareUrl(c) {
 /**
  * 成品卡片上「⧉ 分享链接」复制的那条地址。
  *
- * 优先用后端下发的 `link` —— 那是**成品链接**（转换后端格式的快照链
- * `<后端>/sub?target=…&url=<成品快照>&config=…`）。它与推给 TG 的那条
- * 由后端同一个函数产出，所以卡片上复制的和推出去的是同一条地址。
- * 后端没给（老成品 / 未配置后端）时才退回快照直链。
+ * 后端下发的 `link` 是**成品链接**（活链 —— 保存时把产出面板那条后端地址
+ * 原样存了下来，`<后端>/sub?target=…&url=<本站 /feed 活链>&config=…`）。
+ * 它与推给 TG 的那条由后端同一个函数产出，所以卡片上复制的和推出去的是
+ * 同一条地址。老成品（没存活链）退回快照链，再不行才是快照直链。
  */
 function convertedLink(c) {
     return c.link || convertedShareUrl(c);
@@ -795,10 +790,11 @@ async function run() {
 /**
  * 「复制链接」：优先复制**成品链接** —— 转换后端格式的那条地址
  * （`<转换后端>/sub?target=…&url=…&config=…`，后端是哪台就是哪台）。
- * 它是这次转换真正打出去的地址，粘进客户端或浏览器都能复现同一次转换。
+ * 它是这次转换真正打出去的地址，粘进客户端或浏览器都能复现同一次转换；
+ * 「保存成品」时它会被原样存进成品，成为卡片复制 / TG 推送用的那条。
  *
- * 拿不到后端链接时（接口失败 / target=raw）退回订阅分发链接（编辑后的订阅，
- * 带派生只读密钥、不转换）；连分发链接都没有的形态（来源全是外部地址）
+ * 拿不到后端链接时（接口失败 / target=raw）退回订阅分发 feed（编辑后的订阅，
+ * 带派生只读密钥、不转换）；连 feed 都没有的形态（来源全是外部地址）
  * 才退回带管理令牌的本站直链 —— 那条只适合自己用。
  */
 function copyResultLink() {
@@ -809,9 +805,9 @@ function copyResultLink() {
         );
         return;
     }
-    if (shareLink.value) {
-        navigator.clipboard.writeText(shareLink.value).then(
-            () => message.success('已复制订阅分发链接（编辑后的订阅，不转换）'),
+    if (feedUrl.value) {
+        navigator.clipboard.writeText(feedUrl.value).then(
+            () => message.success('已复制订阅分发 feed（编辑后的订阅，不转换）'),
             () => message.error('复制失败，请手动复制'),
         );
         return;
@@ -848,7 +844,15 @@ async function doSave() {
     try {
         await api('/api/converted', {
             method: 'POST',
-            body: JSON.stringify({ name, target: form.target, template: form.config, content: result.body }),
+            // backendUrl = 产出面板那条成品链接（这次转换实际打到的后端地址），
+            // 原样存进成品 —— 之后卡片复制 / TG 推送用的就是它（活链，三处同源）。
+            body: JSON.stringify({
+                name,
+                target: form.target,
+                template: form.config,
+                content: result.body,
+                backendUrl: result.backendUrl,
+            }),
         });
         message.success('成品已保存');
         save.open = false;

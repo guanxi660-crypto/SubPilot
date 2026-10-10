@@ -55,17 +55,25 @@ console.log(`\n== 成品分享 / TG 推送回归 @ ${BASE} ==\n`);
 // ---- 准备：造一个成品 ----
 // ⚠️ 成品的分享链接是「保存即定下」的 —— 后端在这一步就自动建好永久分享码，
 // 并把 code 挂在返回的列表项上（shareCode 字段）。这条是本轮最核心的行为。
+// 2026-10-10 起保存还要带**活链**（产出面板那条「成品链接」，这次转换实际打到
+// 的后端地址）—— 卡片复制 / TG 推送都原样用它，与产出面板逐字一致。
+const LIVE_URL =
+    'https://sce.example.test/sub?target=clash&url=' +
+    encodeURIComponent(`tag:VT,provider:VT,${BASE}/feed/sub/_vt_conv_src?ft=vtft`) +
+    '&emoji=false';
+// 重存（target=shadowrocket）时前端会交上来的新活链
+const LIVE_URL2 = LIVE_URL.replace('target=clash', 'target=shadowrocket');
 const made = await req('/api/converted', {
     method: 'POST',
-    body: JSON.stringify({ name: NAME, target: 'clash', template: '', content: CONTENT }),
+    body: JSON.stringify({ name: NAME, target: 'clash', template: '', content: CONTENT, backendUrl: LIVE_URL }),
 });
-ok('创建成品', made.res.status === 201, `HTTP ${made.res.status}`);
+ok('创建成品', made.res.status === 201, `HTTP ${made.res.status} · 响应体 ${made.text.length} 字节`);
 const created = (made.json?.data || []).find((x) => x.name === NAME);
 ok('保存后立即带 shareCode', !!created?.shareCode, created?.shareCode || '(空)');
 ok('列表项带 size 且不泄漏 content', typeof created?.size === 'number' && !('content' in (created || {})), `size=${created?.size}`);
 
-// ---- 成品链接（2026-10-10 新增）：卡片复制 / TG 推送用的都是它 ----
-// 形状 = <转换后端>/sub?target=<成品格式>&url=<成品自身的快照>&config=<模板>
+// ---- 成品链接（活链）：卡片复制 / TG 推送用的都是它 ----
+// 形状 = 保存时存下的那条后端地址（url= 指向本站 /feed 活链，内容跟随订阅更新）。
 const parseLink = (s) => {
     try {
         return new URL(s);
@@ -75,15 +83,39 @@ const parseLink = (s) => {
 };
 const convLink = parseLink(created?.link || '');
 ok('列表项带 link（成品链接）', !!convLink && /\/sub$/.test(convLink.pathname), created?.link || '(空)');
+ok('成品链接 = 保存时存下的那条活链（逐字一致）', created?.link === LIVE_URL, created?.link || '(空)');
 ok('成品链接带 target=<成品格式>', convLink?.searchParams.get('target') === 'clash', created?.link || '');
 ok('成品链接带后端域名（不是本站 /share 直链）', !!convLink && !convLink.pathname.includes('/share/'), created?.link || '');
+ok('成品链接的 url= 指向本站 /feed 活链', (convLink?.searchParams.get('url') || '').includes('/feed/sub/'), convLink?.searchParams.get('url') || '(空)');
+ok('成品链接不再是快照链（url= 不指向 /share/converted）', !(convLink?.searchParams.get('url') || '').includes('/share/converted/'), convLink?.searchParams.get('url') || '(空)');
 ok('成品链接上没有任何来源标记', !/[?&]src=/.test(created?.link || ''), created?.link || '');
+
+// 活链校验：非 http(s) 一律拒收（否则卡片链接可能变成 javascript: 之类载体）
 {
-    const inner = parseLink(convLink?.searchParams.get('url') || '');
+    const bad = await req('/api/converted', {
+        method: 'POST',
+        body: JSON.stringify({ name: NAME, target: 'clash', template: '', content: CONTENT, backendUrl: 'javascript:alert(1)' }),
+    });
+    ok('非 http(s) 的成品链接被拒收', bad.res.status === 400, `HTTP ${bad.res.status}`);
+}
+
+// ---- 老成品退路：没存活链的（该字段上线前保存的）退回快照链 ----
+// 形状 = <转换后端>/sub?target=<成品格式>&url=<成品自身的快照>&config=<模板>
+const NAME2 = `_vt_conv_legacy_${Date.now().toString(36)}`;
+const made2 = await req('/api/converted', {
+    method: 'POST',
+    body: JSON.stringify({ name: NAME2, target: 'clash', template: '', content: CONTENT }),
+});
+ok('创建老格式成品（不带 backendUrl）', made2.res.status === 201, `HTTP ${made2.res.status}`);
+const legacy = (made2.json?.data || []).find((x) => x.name === NAME2);
+const legacyLink = parseLink(legacy?.link || '');
+ok('老成品退回快照链（/sub? 形状）', !!legacyLink && /\/sub$/.test(legacyLink.pathname), legacy?.link || '(空)');
+{
+    const inner = parseLink(legacyLink?.searchParams.get('url') || '');
     ok(
-        '成品链接的 url= 指向该成品自身的快照',
-        !!inner && inner.pathname === `/share/converted/${NAME}` && inner.searchParams.get('code') === created?.shareCode,
-        convLink?.searchParams.get('url') || '(空)',
+        '老成品快照链的 url= 指向该成品自身的快照',
+        !!inner && inner.pathname === `/share/converted/${NAME2}` && inner.searchParams.get('code') === legacy?.shareCode,
+        legacyLink?.searchParams.get('url') || '(空)',
     );
 }
 
@@ -96,25 +128,16 @@ if (FIXED_CODE) {
     ok('固定链接可直接访问', hit1.status === 200, `HTTP ${hit1.status}`);
     ok('固定链接返回原内容', (await hit1.text()) === CONTENT);
 
+    // 重存带新活链：target 变了，前端会把新一条成品链接交上来 —— link 必须跟着换
     await req('/api/converted', {
         method: 'POST',
-        body: JSON.stringify({ name: NAME, target: 'shadowrocket', template: '', content: CONTENT + '#v2\n' }),
+        body: JSON.stringify({ name: NAME, target: 'shadowrocket', template: '', content: CONTENT + '#v2\n', backendUrl: LIVE_URL2 }),
     });
     const again = await req('/api/converted');
     const it2 = (again.json?.data || []).find((x) => x.name === NAME);
     ok('重存后 shareCode 不变', it2?.shareCode === FIXED_CODE, `${it2?.shareCode}`);
     ok('重存后 target 已更新', it2?.target === 'shadowrocket', it2?.target);
-    ok(
-        '重存后成品链接的 target 跟着更新',
-        (() => {
-            try {
-                return new URL(it2?.link || '').searchParams.get('target') === 'shadowrocket';
-            } catch {
-                return false;
-            }
-        })(),
-        it2?.link || '(空)',
-    );
+    ok('重存后成品链接换成新活链', it2?.link === LIVE_URL2, it2?.link || '(空)');
     const hit2 = await fetch(url1);
     ok('重存后固定链接仍然有效', hit2.status === 200, `HTTP ${hit2.status}`);
     ok('重存后返回的是新内容', (await hit2.text()) === CONTENT + '#v2\n');
@@ -134,7 +157,7 @@ ok('为成品生成分享码', !!code && gen.json?.data?.type === 'converted', c
 if (code && FIXED_CODE) {
     await req('/api/converted', {
         method: 'POST',
-        body: JSON.stringify({ name: NAME, target: 'shadowrocket', template: '', content: CONTENT + '#v3\n' }),
+        body: JSON.stringify({ name: NAME, target: 'shadowrocket', template: '', content: CONTENT + '#v3\n', backendUrl: LIVE_URL2 }),
     });
     const shares = await req('/api/shares');
     const mine = (shares.json?.data || []).filter((s) => s.type === 'converted' && s.name === NAME);
@@ -225,9 +248,13 @@ ok('已还原 TG 目标列表', true);
 const del = await req(`/api/converted/${encodeURIComponent(NAME)}`, { method: 'DELETE' });
 ok('删除成品成功', del.res.status === 200, `HTTP ${del.res.status}`);
 
+// 老格式成品一并清掉
+const del2 = await req(`/api/converted/${encodeURIComponent(NAME2)}`, { method: 'DELETE' });
+ok('删除老格式成品成功', del2.res.status === 200, `HTTP ${del2.res.status}`);
+
 const list2 = await req('/api/shares');
 const dead = (list2.json?.data || []).filter(
-    (s) => s.type === 'converted' && s.name === NAME,
+    (s) => s.type === 'converted' && (s.name === NAME || s.name === NAME2),
 );
 ok('分享码随成品一起被回收', !dead.length, dead.length ? `仍存在：${JSON.stringify(dead)}` : '已清除');
 
@@ -235,6 +262,8 @@ for (const c of [code, FIXED_CODE].filter(Boolean)) {
     const gone = await fetch(`${BASE}/share/converted/${encodeURIComponent(NAME)}?code=${c}`);
     ok('旧分享链接已失效', gone.status === 403, `HTTP ${gone.status}`);
 }
+const gone2 = await fetch(`${BASE}/share/converted/${encodeURIComponent(NAME2)}?code=${legacy?.shareCode}`);
+ok('老格式成品的分享链接也已失效', gone2.status === 403, `HTTP ${gone2.status}`);
 
 console.log(`\n== 结果：${pass} 通过 / ${fail} 失败 ==\n`);
 process.exit(fail ? 1 : 0);

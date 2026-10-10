@@ -25,6 +25,7 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib';
+import { createHash } from 'node:crypto';
 
 import worker from '../src/index.js';
 import { createAssets } from './assets.mjs';
@@ -196,9 +197,14 @@ function compress(buf, encoding) {
 }
 
 function cacheKey(buf) {
-    // 用长度 + 头尾采样做键：不必真算哈希，够区分不同资源就行，
-    // 且避免了每次请求都跑一遍哈希的开销。
-    return `${buf.length}:${buf[0] ?? 0}:${buf[buf.length - 1] ?? 0}`;
+    // ⚠️ 必须是**真哈希**，不能用「长度 + 头尾采样」。
+    // 曾经的实现是 `${buf.length}:${buf[0]}:${buf[buf.length-1]}` —— 两次
+    // /api/converted 列表响应的长度一样、首尾又都是 `{` `}`，键直接撞上，
+    // 于是第二次请求拿到的是**上一次那条响应的压缩体**：客户端看到「POST 返回
+    // 201，但响应里没有刚建的那一项」，而库里其实写成功了。这是**静默返回错数据**，
+    // 比慢一点严重得多（同长度的两个响应一旦撞键，就等于把别人的内容发给了你）。
+    // sha1 对 1MB 只要几毫秒，而它省下的那次 brotli(q5) 要几十毫秒 —— 依然划算。
+    return createHash('sha1').update(buf).digest('base64url');
 }
 
 async function maybeCompress(bodyBuf, contentType, acceptEncoding) {

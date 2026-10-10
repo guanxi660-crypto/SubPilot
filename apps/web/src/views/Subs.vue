@@ -71,6 +71,7 @@
                     <div class="flex items-center gap-2 mt-4 opacity-70 group-hover:opacity-100 transition flex-wrap">
                         <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0" @click="preview(s)">预览</button>
                         <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0" title="编辑后的订阅：URI 来源输出 v2ray 通用订阅，clash 来源输出 clash YAML，不转换" @click="copySub(s)">复制订阅</button>
+                        <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0" title="下载编辑后的订阅文件（URI 订阅存 .txt，clash 来源存 .yaml）" @click="download(s)">下载</button>
                         <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0" @click="router.push(`/subs/edit/${encodeURIComponent(s.name)}`)">编辑</button>
                         <TgPushButton kind="sub" :name="s.name" :label="s.displayName || s.name" />
                         <button
@@ -129,6 +130,7 @@ import { useRouter } from 'vue-router';
 import { useMessage, useDialog } from 'naive-ui';
 import draggable from 'vuedraggable';
 import { api } from '../stores/auth.js';
+import { downloadFeed } from '../utils/download.js';
 import EmptyState from '../components/EmptyState.vue';
 import NodeList from '../components/NodeList.vue';
 import TgPushButton from '../components/TgPushButton.vue';
@@ -208,6 +210,16 @@ async function preview(s) {
         };
     } catch (e) {
         message.error(e.message, { duration: 8000 });
+    }
+}
+
+/** 下载编辑后的订阅（URI 订阅 .txt / clash 来源 .yaml，见 utils/download.js） */
+async function download(s) {
+    try {
+        await downloadFeed('sub', s.name, s.displayName || s.name);
+        message.success('已开始下载');
+    } catch (e) {
+        message.error(`下载失败：${e.message}`);
     }
 }
 

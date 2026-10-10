@@ -57,6 +57,7 @@
 
                     <div class="flex items-center gap-2 mt-4 opacity-70 group-hover:opacity-100 transition flex-wrap">
                         <button class="btn-ghost !py-1.5 text-xs" @click="openEdit(f)">编辑</button>
+                        <button class="btn-ghost !py-1.5 text-xs" title="下载文件正文（远程文件直接打开其地址）" @click="download(f)">下载</button>
                         <button class="btn-ghost !py-1.5 text-xs" @click="openGen(f)">生成链接</button>
                         <button class="btn-ghost !py-1.5 text-xs" @click="togglePanel(f)">分享链接</button>
                         <TgPushButton kind="file" :name="f.name" :label="f.displayName || f.name" />
@@ -173,6 +174,7 @@ import TgPushButton from '../components/TgPushButton.vue';
 import ShareDialog from '../components/ShareDialog.vue';
 import ShareList from '../components/ShareList.vue';
 import { validateName } from '../utils/name.js';
+import { downloadFile } from '../utils/download.js';
 
 const router = useRouter();
 const message = useMessage();
@@ -336,6 +338,15 @@ async function saveFile() {
         message.error(e.message, { duration: 8000 });
     } finally {
         drawer.saving = false;
+    }
+}
+
+/** 下载文件正文（远程文件打开其地址，本地内容走 API 取正文） */
+async function download(f) {
+    try {
+        await downloadFile(f);
+    } catch (e) {
+        message.error(`下载失败：${e.message}`);
     }
 }
 

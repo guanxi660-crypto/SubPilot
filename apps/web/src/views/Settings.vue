@@ -169,12 +169,12 @@
             <div class="text-[11px] text-slate-500 mt-3 space-y-1.5 leading-relaxed">
                 <div>SubPilot <span class="font-mono">{{ backend.appVersion || '0.1.0' }}</span> · AGPL-3.0</div>
                 <div>
-                    本站不实现格式转换，转换层为
+                    本项目不实现格式转换，转换层为
                     <a href="https://github.com/Aethersailor/SubConverter-Extended" target="_blank" rel="noreferrer" class="text-accent2 hover:underline">SubConverter-Extended</a>
                     （GPL-3.0）；本项目未包含其源码，仅通过 HTTP 调用其 <code>/sub</code> 接口。
                 </div>
                 <div>
-                    当前默认转换后端为本站自建（基于 SubConverter-Extended），
+                    当前默认转换后端为本项目自建（基于 SubConverter-Extended），
                     <strong class="text-slate-400">公益免费提供</strong>，不承诺可用性、稳定性与实时性，请勿滥用。
                     长期使用或对稳定性有要求，建议在「转换」页换成自建后端。
                 </div>

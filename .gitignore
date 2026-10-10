@@ -4,6 +4,9 @@ node_modules/
 # 构建产物（由 `npm run build` 生成，部署时由 Worker 的 assets 绑定上传）
 apps/web/dist/
 
+# 发布包（scripts/package-release.mjs 生成，走 GitHub Release 附件分发，不入库）
+release/
+
 # wrangler 本地状态（含 dev 环境的 KV 数据，可能带真实订阅/令牌）
 apps/server/.wrangler/
 

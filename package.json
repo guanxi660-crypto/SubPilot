@@ -1,6 +1,6 @@
 {
     "name": "subpilot",
-    "version": "0.1.1",
+    "version": "0.1.12",
     "private": true,
     "type": "module",
     "description": "SubPilot —— 面向 SubConverter-Extended 的订阅管理控制台（订阅 / JSON 脚本处理 / 组合 / 文件分享 / AI 助手 / 同步），单 Cloudflare Worker 部署",

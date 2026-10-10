@@ -49,6 +49,7 @@
                     <div class="flex items-center gap-2 mt-4 opacity-70 group-hover:opacity-100 transition flex-wrap">
                         <button class="btn-ghost !py-1.5 text-xs" @click="preview(c)">预览</button>
                         <button class="btn-ghost !py-1.5 text-xs" title="编辑后的订阅：URI 来源输出 v2ray 通用订阅，clash 来源输出 clash YAML，不转换" @click="copyCol(c)">复制订阅</button>
+                        <button class="btn-ghost !py-1.5 text-xs" title="下载编辑后的订阅文件（URI 订阅存 .txt，clash 来源存 .yaml）" @click="download(c)">下载</button>
                         <button class="btn-ghost !py-1.5 text-xs" @click="openEdit(c)">编辑</button>
                         <TgPushButton kind="col" :name="c.name" :label="c.displayName || c.name" />
                         <button class="btn-ghost !py-1.5 text-xs !text-rose-300/80 ml-auto" @click="remove(c)">删除</button>
@@ -186,6 +187,7 @@ import TgPushButton from '../components/TgPushButton.vue';
 import OperatorEditor from '../components/OperatorEditor.vue';
 import { loadOperatorMeta } from '../stores/operators.js';
 import { validateName } from '../utils/name.js';
+import { downloadFeed } from '../utils/download.js';
 
 const router = useRouter();
 const message = useMessage();
@@ -351,6 +353,16 @@ async function copyCol(c) {
         message.success('已复制订阅链接（编辑后的订阅，不转换，全客户端可导入）');
     } catch (e) {
         message.error(`生成链接失败：${e.message}`);
+    }
+}
+
+/** 下载编辑后的组合订阅（URI 订阅 .txt / clash 来源 .yaml） */
+async function download(c) {
+    try {
+        await downloadFeed('col', c.name, c.displayName || c.name);
+        message.success('已开始下载');
+    } catch (e) {
+        message.error(`下载失败：${e.message}`);
     }
 }
 

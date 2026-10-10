@@ -49,7 +49,10 @@
                 <div>
                     <label class="text-xs text-slate-500">Personal Access Token</label>
                     <input
-                        v-model="cfg.gist.token"
+                        :value="secretDisplay(cfg.gist.token, sync.gist?.hasToken, 'gist')"
+                        @input="cfg.gist.token = $event.target.value"
+                        @focus="secretEditing.gist = true"
+                        @blur="secretEditing.gist = false"
                         v-bind="SECRET_FIELD"
                         name="sp-gist-token"
                         class="input mt-1.5 font-mono !text-xs"
@@ -114,7 +117,10 @@
                 <div>
                     <label class="text-xs text-slate-500">应用密码</label>
                     <input
-                        v-model="cfg.webdav.pass"
+                        :value="secretDisplay(cfg.webdav.pass, sync.webdav?.hasPass, 'webdav')"
+                        @input="cfg.webdav.pass = $event.target.value"
+                        @focus="secretEditing.webdav = true"
+                        @blur="secretEditing.webdav = false"
                         v-bind="SECRET_FIELD"
                         name="sp-webdav-pass"
                         class="input mt-1.5"
@@ -173,7 +179,10 @@
                         Bot Token{{ tgCfg.tokenSet ? '（已配置）' : '' }}
                     </label>
                     <input
-                        v-model="tg.token"
+                        :value="secretDisplay(tg.token, tgCfg.tokenSet, 'tg')"
+                        @input="tg.token = $event.target.value"
+                        @focus="secretEditing.tg = true"
+                        @blur="secretEditing.tg = false"
                         v-bind="SECRET_FIELD"
                         name="sp-tg-bot-token"
                         class="input mt-1.5 font-mono !text-xs"
@@ -352,6 +361,18 @@ import { NO_AUTOFILL, secretFieldProps } from '../utils/inputs.js';
 
 // 三个密钥框共用同一份防自动填充属性（text-security 圆点伪装）
 const SECRET_FIELD = secretFieldProps();
+
+// ---- 已保存密钥的「圆点占位」----
+// 后端只回掩码、不回明文，输入框绑定值一直是空 —— 切页返回后框里就是一片空白，
+// 用户看不出「到底存过没有」。这里在「已保存且用户没动过」时把框内填成圆点串
+// （输入框本身带 -webkit-text-security: disc，显示的也是圆点），聚焦即清空待输入，
+// 失焦仍为空则恢复圆点。提交语义不变：框里是空 = 不修改。
+const SECRET_DOTS = '••••••••';
+const secretEditing = reactive({ gist: false, webdav: false, tg: false });
+function secretDisplay(actual, saved, key) {
+    if (actual) return actual;
+    return saved && !secretEditing[key] ? SECRET_DOTS : '';
+}
 
 const router = useRouter();
 const message = useMessage();

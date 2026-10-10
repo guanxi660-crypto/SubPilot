@@ -230,7 +230,7 @@
 
             <div v-if="shareLink" class="mt-3 bg-panel2 rounded-xl p-3">
                 <div class="text-[11px] text-emerald-300/90">
-                    分发链接（带派生只读密钥，可直接发给别人 / 粘进客户端）
+                    订阅分发链接（编辑后的节点，不转换；带派生只读密钥，可直接发给别人 / 粘进客户端）
                 </div>
                 <div class="text-xs font-mono break-all mt-1.5">{{ shareLink }}</div>
                 <div v-if="feedUrl" class="text-[11px] text-slate-600 font-mono break-all mt-1.5">
@@ -740,14 +740,22 @@ async function run() {
 }
 
 /**
- * 「复制链接」：把本次转换结果以链接形式复制出去，而不是复制响应体。
- * 优先复制分发链接（带派生只读密钥，可直接发给别人 / 粘进客户端）；
- * 直连等没有分发链接的形态，回退用当前转换参数拼出 /sub?... 直链。
+ * 「复制链接」：优先复制订阅分发链接（编辑后的订阅，带派生只读密钥，
+ * 可直接发给别人 / 粘进客户端；分发通道不转换）。
+ * 直连等没有分发链接的形态，回退用当前转换参数拼出 /sub?... 直链
+ * —— 注意那条直链带管理令牌，只适合自己用。
  */
 function copyResultLink() {
-    const link = shareLink.value || `${location.origin}/sub?${buildParams().toString()}`;
+    if (shareLink.value) {
+        navigator.clipboard.writeText(shareLink.value).then(
+            () => message.success('已复制订阅分发链接（编辑后的订阅，不转换）'),
+            () => message.error('复制失败，请手动复制'),
+        );
+        return;
+    }
+    const link = `${location.origin}/sub?${buildParams().toString()}`;
     navigator.clipboard.writeText(link).then(
-        () => message.success('转换链接已复制，可直接发给别人或粘进客户端'),
+        () => message.success('已复制转换直链（含管理令牌，勿外发）', { duration: 6000 }),
         () => message.error('复制失败，请手动复制'),
     );
 }

@@ -48,9 +48,7 @@
 
                     <div class="flex items-center gap-2 mt-4 opacity-70 group-hover:opacity-100 transition flex-wrap">
                         <button class="btn-ghost !py-1.5 text-xs" @click="preview(c)">预览</button>
-                        <n-dropdown trigger="click" :options="copyTargets" @select="(t) => copyCol(c, t)">
-                            <button class="btn-ghost !py-1.5 text-xs">复制订阅</button>
-                        </n-dropdown>
+                        <button class="btn-ghost !py-1.5 text-xs" title="编辑后的订阅：URI 来源输出 v2ray 通用订阅，clash 来源输出 clash YAML，不转换" @click="copyCol(c)">复制订阅</button>
                         <button class="btn-ghost !py-1.5 text-xs" @click="openEdit(c)">编辑</button>
                         <TgPushButton kind="col" :name="c.name" :label="c.displayName || c.name" />
                         <button class="btn-ghost !py-1.5 text-xs !text-rose-300/80 ml-auto" @click="remove(c)">删除</button>
@@ -179,7 +177,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { useMessage, useDialog, NDropdown } from 'naive-ui';
+import { useMessage, useDialog } from 'naive-ui';
 import draggable from 'vuedraggable';
 import { api } from '../stores/auth.js';
 import EmptyState from '../components/EmptyState.vue';
@@ -197,7 +195,6 @@ const collections = ref([]);
 const subs = ref([]);
 const loading = ref(true);
 const previewData = ref(null);
-const copyTargets = ref([]);
 
 const editor = reactive({
     open: false,
@@ -207,16 +204,6 @@ const editor = reactive({
     form: { name: '', displayName: '', subscriptions: [], process: [] },
     preview: { loading: false, error: '', nodes: [], log: [], total: null },
 });
-
-function buildCopyTargets() {
-    // 只保留两个有用的目标：v2ray 通用（raw，服务端本地产出，不依赖转换后端，
-    // 见 convert.js 的 target=raw 分支）与 Clash / Mihomo。
-    // singbox / shadowrocket / vless / ss 等其余格式用不上，已移除（2026-10-10）。
-    copyTargets.value = [
-        { label: 'v2ray通用', key: 'raw' },
-        { label: 'Clash / Mihomo', key: 'clash' },
-    ];
-}
 
 async function onDragEnd() {
     try {
@@ -353,15 +340,15 @@ async function preview(c) {
     }
 }
 
-async function copyCol(c, target) {
+async function copyCol(c) {
     try {
-        // 服务端生成，带派生的只读分发密钥（?ft=），不含管理令牌
+        // 服务端生成，带派生的只读分发密钥（?ft=），不含管理令牌。
+        // 一条链接通吃：分发通道不转换，URI 来源 → v2ray 通用订阅，
+        // clash 来源 → 本地 clash YAML（Sub-Store 模式，target 已被忽略）。
         const qs = new URLSearchParams({ kind: 'col', name: c.name });
-        if (target) qs.set('target', target);
         const res = await api(`/api/link?${qs.toString()}`);
         await navigator.clipboard.writeText(res.data.link);
-        const label = copyTargets.value.find((x) => x.key === target)?.label || 'v2ray通用';
-        message.success(`已复制「${label}」链接`);
+        message.success('已复制订阅链接（编辑后的订阅，不转换，全客户端可导入）');
     } catch (e) {
         message.error(`生成链接失败：${e.message}`);
     }
@@ -387,7 +374,6 @@ function remove(c) {
 
 onMounted(async () => {
     await loadOperatorMeta();
-    buildCopyTargets();
     load();
 });
 </script>

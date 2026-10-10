@@ -235,7 +235,7 @@ async function buildFeedUrl(env, snap, { base, sub, collection, adhoc }) {
  *   process=<base64>    临时算子链（JSON 数组的 base64）
  *   direct=1            强制不本地处理，原样交给 SCE
  */
-export async function handleSub(request, env, ctx, { query, method, tokenFromAuth, rawFallbackTarget = '' }) {
+export async function handleSub(request, env, ctx, { query, method, tokenFromAuth }) {
     const snap = await loadSnapshot(env);
     const base = resolveBackend(env, snap.settings);
     const params = extractParams(query);
@@ -283,10 +283,12 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
         return fail('缺少来源：请提供 url、sub 或 collection 参数', 400);
     }
 
-    // ---- raw 通道：v2ray 通用订阅（base64 的 URI 列表），完全不经过 SCE ----
-    // 以前「通用订阅」不带 target，落到下面的默认 target=clash —— 客户端拿到的是
-    // clash 配置根本没法用，这就是「通用订阅不可用」的根因。现在显式 target=raw，
-    // 走本地 pipeline（订阅算子 / 合并 / 重名兜底都在），输出标准 v2ray 订阅格式。
+    // ---- raw 通道：编辑后的订阅（Sub-Store 模式），完全不经过 SCE ----
+    // 分发/分享链接输出的就是**编辑后的节点本身**：URI 来源 → v2ray base64
+    // URI 列表（通用订阅，各客户端直接导入、当转换输入也不会二次转换翻车）；
+    // clash 来源 → 本地序列化的 clash YAML（stringifyYaml，同样不经 SCE）。
+    // ?target=xxx 在分发通道被忽略 —— SCE 实时转换只保留给转换页（/sub
+    // 显式 target）与「保存成品」（/api/converted），分享链接永远不转换。
     if (params.target === 'raw') {
         let result;
         try {
@@ -295,24 +297,26 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
             return fail(`节点处理失败：${e.message || e}`, 500);
         }
 
-        // 来源全是 clash 形态节点时没有 URI 载体可输出：
-        //   · 显式 target=raw —— 报错引导换目标格式；
-        //   · 分发通道的默认 raw（rawFallback 有值）—— 回落到站点默认客户端
-        //     格式走 SCE，保证分享链接至少能拉到东西（clash 来源本来就不存在
-        //     「通用形态」，回落不算二次转换问题）。
-        if (!result.nodes.some((n) => n.raw)) {
-            if (!rawFallbackTarget) {
-                return fail('来源中没有 URI 形态的节点（clash 配置无法转成 v2ray 订阅，请用 clash 等目标格式）', 400);
-            }
-            params.target = rawFallbackTarget;
-        } else {
+        if (!result.nodes.length) return fail('来源没有可分发的节点', 404);
+
+        // 有 URI 载体就输出通用订阅（clash 形态节点混在里面出不了 URI，
+        // 会被 serializeNodes 的 filter(Boolean) 掉 —— 数量头按实际输出计）；
+        // 全是 clash 形态（没有 URI 载体）就本地产 clash YAML。
+        const uriNodes = result.nodes.filter((n) => n.raw);
+        if (uriNodes.length) {
             return text(serializeNodes(result.nodes, 'uri'), 200, 'text/plain;charset=UTF-8', {
                 'Cache-Control': 'no-store',
-                'X-SubPilot-Nodes': String(result.nodes.length),
+                'X-SubPilot-Nodes': String(uriNodes.length),
                 'X-SubPilot-Format': 'uri',
                 'Access-Control-Allow-Origin': '*',
             });
         }
+        return text(serializeNodes(result.nodes, 'clash'), 200, 'text/yaml;charset=UTF-8', {
+            'Cache-Control': 'no-store',
+            'X-SubPilot-Nodes': String(result.nodes.length),
+            'X-SubPilot-Format': 'clash',
+            'Access-Control-Allow-Origin': '*',
+        });
     }
 
     const forceDirect = params.direct === '1' || params.direct === 'true';
@@ -557,21 +561,16 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
         q.set('sub', name);
     }
 
-    // 分发通道无 target = 通用订阅（v2ray base64 URI，本地 pipeline 产出）。
-    // 归档版 Sub-Store 语义：分享链接默认输出**可再解析**的原始节点列表，
-    // 客户端直接可用、当转换输入也不会二次转换翻车；不带 target 就落到
-    // handleSub 的默认 clash 的话，分享出去的是转换后配置 —— 被当成订阅
-    // 源再转一次（二次转换）会解析不出节点。需要特定客户端格式时显式
-    // ?target=clash / singbox，走 SCE 实时转换。
-    if (!q.has('target')) q.set('target', 'raw');
+    // 分发通道 = 编辑后的订阅（Sub-Store 模式），**target 参数一律忽略**
+    //（无条件覆盖，老链接带 ?target=clash 也输出未转换内容）。此前默认走
+    // SCE 转换 —— 分享出去的是转换后配置，被下游当订阅源再转一次（二次
+    // 转换）解析不出节点，这也是多客户端分享支持被砍掉的根因。现在分发
+    // 链接只产出本地 pipeline 的编辑结果：URI 来源 → base64 URI 列表，
+    // clash 来源 → 本地 clash YAML（见 handleSub raw 分支）。要特定客户端
+    // 的转换格式请走转换页（/sub?target=xxx 或「保存成品」）。
+    q.set('target', 'raw');
 
-    const res = await handleSub(request, env, ctx, {
-        query: q,
-        method,
-        tokenFromAuth,
-        // 分发默认 raw 拉不到 URI 节点（clash 来源）时回落站点默认格式
-        rawFallbackTarget: snap.settings.defaultTarget || 'clash',
-    });
+    const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth });
 
     // 统计只记成功分发（失败也记的话会污染「拉取次数」这个指标）
     if (res.ok && ctx?.waitUntil) {
@@ -661,16 +660,11 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     if (kind === 'sub') q.set('sub', name);
     else q.set('collection', name);
 
-    // 与 /download 同语义：分享码通道无 target = 通用订阅（raw），
-    // 避免默认 clash 的转换后格式被下游二次转换（见 handleDownload 注释）。
-    if (!q.has('target')) q.set('target', 'raw');
+    // 与 /download 同语义：分享码通道 = 编辑后的订阅（raw），target 一律忽略
+    //（见 handleDownload 注释）。
+    q.set('target', 'raw');
 
-    const res = await handleSub(request, env, ctx, {
-        query: q,
-        method,
-        tokenFromAuth: '',
-        rawFallbackTarget: snap.settings.defaultTarget || 'clash',
-    });
+    const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth: '' });
     if (res.ok && ctx?.waitUntil) {
         ctx.waitUntil(
             recordPull(env, {
@@ -689,9 +683,10 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
  * 生成分发链接。给前端「复制订阅」用。
  *
  * 返回两条：
- *   link     —— 带派生分发密钥（?ft=），可安全发给别人 / 粘进客户端；
- *               **不带 target = 通用订阅（v2ray base64 URI）**，可再解析、
- *               可当转换输入；带 ?target=clash 等 = 该客户端的转换格式
+ *   link     —— 带派生分发密钥（?ft=），可安全发给别人 / 粘进客户端。
+ *               **永远是编辑后的订阅（Sub-Store 模式）**：URI 来源 → base64
+ *               URI 通用订阅，clash 来源 → 本地 clash YAML；target 参数
+ *               已不再写入链接（/download 分发通道会忽略它）。
  *   adminLink —— 带管理令牌，只在本机排障时用，不要外发
  *
  * 两种寻址方式：
@@ -710,7 +705,7 @@ export async function buildLinks(request, env, snap, { kind, name, target = '', 
 
         const dl = new URLSearchParams();
         dl.set('spec', spec);
-        if (target) dl.set('target', target);
+        // target 不写入分发链接：/download 分发通道一律输出编辑后的订阅
         dl.set('ft', ft);
 
         const admin = new URLSearchParams(dl);
@@ -732,7 +727,8 @@ export async function buildLinks(request, env, snap, { kind, name, target = '', 
             : `/download/${encodeURIComponent(name)}`;
 
     const qs = new URLSearchParams();
-    if (target) qs.set('target', target);
+    // target 不写入分发链接（参数保留在签名里只为调用方兼容）：分发通道
+    // 一律输出编辑后的订阅，见本函数头注释与 handleDownload 注释
     qs.set('ft', ft);
 
     const admin = new URLSearchParams(qs);

@@ -70,9 +70,7 @@
 
                     <div class="flex items-center gap-2 mt-4 opacity-70 group-hover:opacity-100 transition flex-wrap">
                         <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0" @click="preview(s)">预览</button>
-                        <n-dropdown trigger="click" :options="copyTargets" @select="(t) => copySub(s, t)">
-                            <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0">复制订阅</button>
-                        </n-dropdown>
+                        <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0" title="编辑后的订阅：URI 来源输出 v2ray 通用订阅，clash 来源输出 clash YAML，不转换" @click="copySub(s)">复制订阅</button>
                         <button class="btn-ghost !py-1.5 text-xs whitespace-nowrap shrink-0" @click="router.push(`/subs/edit/${encodeURIComponent(s.name)}`)">编辑</button>
                         <TgPushButton kind="sub" :name="s.name" :label="s.displayName || s.name" />
                         <button
@@ -128,7 +126,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { useMessage, useDialog, NDropdown } from 'naive-ui';
+import { useMessage, useDialog } from 'naive-ui';
 import draggable from 'vuedraggable';
 import { api } from '../stores/auth.js';
 import EmptyState from '../components/EmptyState.vue';
@@ -151,18 +149,20 @@ function setCols(n) {
     localStorage.setItem(COLS_KEY, String(cols.value));
 }
 
-/** 复制订阅下拉：v2ray通用（raw）与 Clash / Mihomo + 「全部格式…」跳转换页 */
-const copyTargets = ref([]);
-function buildCopyTargets() {
-    // 只保留两个有用的目标：v2ray 通用（raw，服务端本地产出，不依赖转换后端，
-    // 见 convert.js 的 target=raw 分支）与 Clash / Mihomo。
-    // singbox / shadowrocket / vless / ss 等其余格式用不上，已移除（2026-10-10）。
-    copyTargets.value = [
-        { label: 'v2ray通用', key: 'raw' },
-        { label: 'Clash / Mihomo', key: 'clash' },
-        { type: 'divider', key: 'd1' },
-        { label: '更多格式 → 转换页', key: '__more' },
-    ];
+/** 复制订阅：一条链接通吃所有客户端（Sub-Store 模式）。
+ *  分发通道不转换 —— URI 来源输出 v2ray 通用订阅（base64 URI），
+ *  clash 来源输出本地 clash YAML；target 参数已被后端忽略（2026-10-10）。 */
+async function copySub(s) {
+    try {
+        // 链接由服务端生成：里面带的是**派生的只读分发密钥**（?ft=），
+        // 不是管理令牌 —— 后者粘进客户端等于把管理员凭据交出去。
+        const qs = new URLSearchParams({ kind: 'sub', name: s.name });
+        const res = await api(`/api/link?${qs.toString()}`);
+        await navigator.clipboard.writeText(res.data.link);
+        message.success('已复制订阅链接（编辑后的订阅，不转换，全客户端可导入）');
+    } catch (e) {
+        message.error(`生成链接失败：${e.message}`);
+    }
 }
 
 async function load() {
@@ -211,25 +211,6 @@ async function preview(s) {
     }
 }
 
-async function copySub(s, target) {
-    if (target === '__more') {
-        router.push('/converter');
-        return;
-    }
-    try {
-        // 链接由服务端生成：里面带的是**派生的只读分发密钥**（?ft=），
-        // 不是管理令牌 —— 后者粘进客户端等于把管理员凭据交出去。
-        const qs = new URLSearchParams({ kind: 'sub', name: s.name });
-        if (target) qs.set('target', target);
-        const res = await api(`/api/link?${qs.toString()}`);
-        await navigator.clipboard.writeText(res.data.link);
-        const label = copyTargets.value.find((x) => x.key === target)?.label || 'v2ray通用';
-        message.success(`已复制「${label}」链接`);
-    } catch (e) {
-        message.error(`生成链接失败：${e.message}`);
-    }
-}
-
 function remove(s) {
     dialog.warning({
         title: '删除订阅',
@@ -250,7 +231,6 @@ function remove(s) {
 
 onMounted(async () => {
     await loadOperatorMeta();
-    buildCopyTargets();
     load();
 });
 </script>

@@ -44,20 +44,6 @@ SCE 是无状态的：只有 `/sub`、`/version`、`/healthz` 等少数路由，
 这样分享出去的链接不会被下游二次转换。需要特定客户端格式时，去**转换页**
 （`/sub?target=xxx`）或保存成品（`/api/converted`）—— 那两条路仍走 SCE。
 
-## 功能
-
-| 模块 | 说明 |
-| --- | --- |
-| 概览 | 资源计数、转换后端状态、分发统计表 |
-| 订阅 | 远程订阅 / 本地节点内容，拖拽排序；编辑页左预览右配置，改名自动同步组合引用。卡片：预览 / 复制订阅 / **下载** / 编辑 / TG / 删除 |
-| JSON 脚本 | 14 种算子组成链（筛选、重命名、排序、地区置顶、去重、国旗、限量…），内联在订阅 / 组合编辑页；内置「一键整理」模板 + 自定义模板 |
-| 组合 | 多个订阅合并为一个产出，可叠加组合层算子链 |
-| 文件 | 规则集 / 模板 / 片段；卡片：编辑 / 下载 / 生成链接 / 分享链接 / TG |
-| 转换 | 8 种目标格式（clash / sing-box / Shadowrocket / VLESS / Hysteria2 / Trojan / SS / SSR），生成分发链接与 feed 地址；多选来源同样有分发链接；成品可保存、下载、固定分享。产出卡还给一条**成品链接**——这次转换实际打到的后端地址（`<转换后端>/sub?target=…&url=…&config=…`，后端是哪台就是哪台），粘进浏览器即可复现同一次转换。外部配置 / 模板记住**上一次用过的地址**（自定义与预设都算），下次进来直接是它；「不套模板」是单次选择，不会覆盖。「订阅分发链接」与 feed 是同一条内容的两个寻址形态，产出卡**只显示 feed**。成品卡片上的「⧉ 分享链接」复制的、以及推给 TG 的成品链接，都是**同一条活链**（2026-10-10 改定：保存成品时把产出面板那条后端地址原样存下来，卡片 / TG 推送 / API `link` 三处逐字一致；`url=` 指向本站 `/feed` 活链，内容跟随订阅更新）。老成品（该字段上线前保存的）退回快照链 `url=<成品自身快照>`，重存一次即升级为活链 |
-| AI 助手 | 描述需求生成 JSON 脚本，SSE 流式输出；提案可预览（跑一遍管线看结果）、保存、忽略 |
-| 同步 | Gist / WebDAV 备份恢复；Telegram 推送（Bot Token 只存服务端，接口只回掩码）。备份含订阅 / 组合 / 文件 / 成品 / 模板**与设置里的非凭据字段**（转换后端、公开地址、默认目标格式、AI Base URL 与模型、TG 推送目标）；**凭据不进备份**，换机后只需补填 AI Key / Gist Token / 网盘密码 / Bot Token |
-| 分发统计 | 记录 `/download/*` 与 `/share/*` 的拉取次数与来源 IP，可导出 CSV。**TG 服务器抓链接预览的那一跳不计入统计**（推送动作本身不该算一次分发）——判据是请求 UA 含 `TelegramBot`，推送链接本身**不带任何来源标记，原链接是什么就推什么**。真人从 TG 里点开、或把链接粘进客户端的拉取照常计入。⚠️ 成品推送链接指向转换后端、由后端再回拉我们的 `/feed` 活链，那一跳我们看到的 UA 是后端的，识别不了，仍会留下一条记录。条目上限 5000，超出按最近拉取时间淘汰最旧的一批，淘汰量在概览页可见 |
-
 ## 本地开发
 
 ```bash
@@ -77,39 +63,6 @@ SUBPILOT_TOKEN=dev-local-token npm start        # → http://127.0.0.1:8795，�
 
 > **改完前端要重启服务。** Worker 的 assets 清单在启动时快照，重新 build 后
 > 新 hash 的 JS 会 404（`index.html` 已指向新文件，表现为白屏 + 两个 404）。
-
-### 验证
-
-```bash
-node scripts/verify.mjs                  # 接口验证（检测到真实数据时自动跳过写入类断言）
-node scripts/verify-security.mjs         # 53 项安全回归（常量时间比较 / 明文令牌 / 安全头 / 协议白名单）
-node scripts/verify-hardening.mjs        # 172 项加固回归（SSRF 逐跳复检 / 失败限流 / 正文上限 / 来源 IP / 设置备份 / 并发写）
-node scripts/verify-convert-link.mjs     # 48 项成品链接回归（后端格式 / host 跟随自定义后端 / 参数不漂移 / 与分发链接同一条 feed）
-node scripts/verify-tg-stats.mjs         # 33 项 TG 推送回归（推送链接无来源标记 / 成品推的是保存时存下的活链、老成品退快照链 / TelegramBot 抓预览不计统计而真人照常计）
-node scripts/verify-regions.mjs          # 56 项地区识别回归（纯函数）
-node scripts/verify-operators.mjs        # 11 项算子回归（纯函数）
-node scripts/verify-presets.mjs          # 104 条配置预设与 SubPilot-Archive 逐字一致
-node scripts/verify-storage.mjs          # 25 项存储层回归（直接开临时库，不走 HTTP）
-node scripts/verify-converted-share.mjs  # 44 项成品分享回归（含活链三处同源 / 非法活链拒收 / 老成品快照退路 / 重存换活链 / 快照 url=）
-node scripts/verify-node-adapter.mjs     # 12 项 Node 适配层回归（响应压缩缓存不许串响应 —— 自建部署专用）
-node scripts/verify-adhoc-link.mjs       # 20 项多来源分发回归
-node scripts/verify-ai.mjs               # 34 项 AI 链路回归（本机起假上游，不烧真 token）
-node scripts/verify-subedit-layout.mjs   # 订阅编辑页布局回归
-node scripts/verify-ui-converted.mjs     # 24 项转换页界面回归（分发 feed 区 / 成品卡复制的是活链）
-node scripts/verify-ui.mjs               # 界面交互验证（需先跑 shots 播种）
-node scripts/shots.mjs                   # 逐页截图到 shots/ + 控制台错误检查
-node scripts/shot-ai.mjs                 # 只截 AI 助手页（不清库，供 dev 库里有真实数据时用）
-node scripts/probe-feed.mjs              # 探针：确认「本地处理」路径下 SCE 引用的是本站 feed 地址
-python scripts/gen-logo.py <原始.svg>    # 从原始图标重新生成 logo 资产（apps/web/public/）
-```
-
-`verify-*` 默认打 `http://127.0.0.1:8795`，令牌取 `SPX_TOKEN` 或 `dev-local-token`，
-所以要**先起服务**；`verify-storage` / `verify-regions` / `verify-operators` / `verify-presets`
-是纯函数或直接开临时库，不需要服务。
-
-`shots.mjs` 会清空服务端资源再播种演示数据，发现白名单外条目时**直接拒绝执行**，
-确认要清空才加 `SHOTS_FORCE=1`。`verify.mjs` 的写入类断言（假 AI key / TG token /
-轮换分发密钥）在检测到真实数据时会自动跳过，需要强制时用 `VERIFY_FORCE_WRITE=1`。
 
 ## 部署到 Cloudflare Worker
 
@@ -194,7 +147,6 @@ apps/server/          Worker 后端
   wrangler.jsonc      生产配置
 apps/web/             Vue 3 + Vite + Tailwind + Naive UI
   src/views components stores utils
-scripts/              验证与截图脚本
 Dockerfile docker-compose.yml .env.example
 LICENSE (AGPL-3.0-only)  NOTICE
 ```

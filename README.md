@@ -54,7 +54,7 @@ docker run -d --name subpilot --init \
   -p 8795:8795 \
   -e SUBPILOT_TOKEN='<你的令牌>' \
   -v subpilot-data:/data \
-  ghcr.io/guanxi660-crypto/subpilot:0.1.13
+  ghcr.io/guanxi660-crypto/subpilot:latest
 ```
 
 | 参数 | 说明 |
@@ -75,7 +75,7 @@ docker run -d --name subpilot --init \
 services:
   subpilot:
     # 直接用已发布的镜像（版本号与 package.json 一致）
-    image: ghcr.io/guanxi660-crypto/subpilot:0.1.13
+    image: ghcr.io/guanxi660-crypto/subpilot:latest
     # 想从源码构建就注释掉上面那行，改用下面这两行：
     #   build:
     #     context: .
@@ -221,18 +221,6 @@ npm run dev:web
 （该值来自 `apps/server/wrangler.dev.jsonc`）。前端 dev server 在
 `http://127.0.0.1:5175`，只改界面时用它更方便。
 
-想跑**自建那套**（Node + SQLite，与 Docker 镜像同一份代码）：
-
-```bash
-npm run build
-SUBPILOT_TOKEN=dev-local-token npm start
-```
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm run build` | 构建前端，产物写到 `apps/web/dist` |
-| `npm start` | 起自建形态后端，监听 `http://127.0.0.1:8795`，数据落在 `apps/server/data/` |
-
 > **改完前端要重启服务。** Worker 的 assets 清单在启动时快照，重新 build 后
 > 新 hash 的 JS 会 404（`index.html` 已指向新文件，表现为白屏 + 两个 404）。
 
@@ -249,9 +237,29 @@ SUBPILOT_TOKEN=dev-local-token npm start
 
 ### 反向代理
 
-`/feed/*`、`/download/*` 的地址会被写进客户端配置，取的是**请求的 origin**，
-反代必须传 `X-Forwarded-Proto` 与 `X-Forwarded-Host`，否则会把内网地址写进配置。
-AI 助手是 SSE 长连接，nginx 需关闭该路径的 buffering。
+nginx：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8795;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+}
+```
+
+Caddy（Caddyfile）：
+
+```caddy
+example.com {
+    reverse_proxy 127.0.0.1:8795 {
+        flush_interval -1
+    }
+}
+```
 
 ## 许可
 

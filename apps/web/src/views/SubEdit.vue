@@ -76,10 +76,10 @@
                             <NodeList :nodes="preview.nodes" />
                         </div>
 
-                        <!-- 拉伸手柄：盖在列表区底部居中，纵向拖动 -->
+                        <!-- 拉伸手柄：盖在列表区底部居中，纵向拖动（任何视口都显示） -->
                         <div
                             data-preview-grip
-                            class="hidden lg:flex absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-4 z-10 cursor-ns-resize items-center justify-center opacity-40 hover:opacity-100 transition-opacity"
+                            class="flex absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-4 z-10 cursor-ns-resize items-center justify-center opacity-40 hover:opacity-100 transition-opacity"
                             title="拖动调整节点列表高度"
                             @mousedown.prevent="startPreviewResize"
                         >

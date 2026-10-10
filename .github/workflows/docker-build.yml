@@ -8,6 +8,7 @@
 # 镜像 tag 规则（metadata-action）：
 #   - dev / main 分支 push  →  branch-<名>
 #   - main 分支             →  latest
+#   - 根 package.json version →  0.1.1（每次构建自动读取，随版本升级）
 #   - tag v1.2.3            →  1.2.3
 #   - 所有构建              →  sha-<短哈希>
 #
@@ -48,6 +49,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # ---- 读取应用版本号（根 package.json，当前 0.1.1）→ 镜像 tag ----
+      - name: Read app version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -99,6 +105,7 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=ref,event=branch
+            type=raw,value=${{ steps.ver.outputs.version }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,prefix=sha-

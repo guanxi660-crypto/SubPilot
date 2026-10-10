@@ -51,7 +51,6 @@
                      自身保持内容自然高（不被右列拉高），顶对齐网格顶，
                      放弃底边对齐限制（页面随 JSON 向下拉伸） -->
                 <div
-                    ref="previewCardEl"
                     class="card p-6 fade-up lg:col-span-1 flex flex-col min-h-0 relative"
                     :class="jsonFlexNone ? 'lg:self-start' : 'lg:self-stretch'"
                 >
@@ -71,26 +70,12 @@
                         <div v-for="(l, i) in preview.log" :key="i">{{ l }}</div>
                     </div>
 
-                    <!-- 节点列表：默认 flex-1 随卡片伸缩、内部滚动；列表右下角
-                         手柄可接管成显式高度（网格随之顶高、页面变长），与
-                         「节点内容」编辑器的手柄同一套交互 -->
-                    <div class="mt-4 flex-1 min-h-0 flex flex-col relative" :class="previewListH == null ? '' : 'lg:flex-none'">
-                        <div
-                            data-preview-list
-                            class="overflow-auto grow min-h-0"
-                            :style="previewListH != null ? { height: `${previewListH}px` } : undefined"
-                        >
+                    <!-- 节点列表：flex-1 随卡片伸缩、内部滚动。
+                         不设手动拖动入口 —— 拖「节点内容」编辑器时预览列
+                         跟着网格一起顶高，无需重复的调整入口 -->
+                    <div class="mt-4 flex-1 min-h-0 flex flex-col relative">
+                        <div data-preview-list class="overflow-auto grow min-h-0">
                             <NodeList :nodes="preview.nodes" />
-                        </div>
-
-                        <!-- 拉伸手柄：盖在列表区底部居中，纵向拖动（任何视口都显示） -->
-                        <div
-                            data-preview-grip
-                            class="flex absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-5 z-10 cursor-ns-resize items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
-                            title="拖动调整节点列表高度"
-                            @mousedown.prevent="startPreviewResize"
-                        >
-                            <span class="block w-8 h-1.5 rounded-full bg-slate-500/80"></span>
                         </div>
                     </div>
                 </div>
@@ -294,15 +279,13 @@ const preview = reactive({ loading: false, error: '', nodes: [], log: [], total:
 //
 // 三股需求都汇到 gridMinH（computed，取各项最大值）：
 //   1. 拖动节点内容编辑器手柄（edDragMinH）—— 编辑器长多少网格顶高多少；
-//   2. 拖动预览节点列表手柄（prevDragMinH）—— 同上，左侧列表自由拉伸；
-//   3. JSON 卡自适应（autoMinH）—— 脚本算子越加越多时，JSON 卡内容
+//   2. JSON 卡自适应（autoMinH）—— 脚本算子越加越多时，JSON 卡内容
 //      超过一屏分配的高度，网格自动顶高、页面变长滚动（用户点名需求：
 //      默认尺寸不变，但算子多时允许超过整屏）。删算子后需求下降、
 //      自动缩回（底线仍是一屏基线 680px）。
-// 默认态三者都无干预 → 整页锁定一屏、两列底边对齐。
+// 默认态两者都无干预 → 整页锁定一屏、两列底边对齐。
 const contentEdH = ref(null);
 const edDragMinH = ref(null);
-const prevDragMinH = ref(null);
 const autoMinH = ref(null);
 // JSON 卡内容需求超过一屏份额时切 flex-none（高度=内容），见 recomputeAuto
 const jsonFlexNone = ref(false);
@@ -316,9 +299,6 @@ const gridBaseH = ref(null);
 // 装得下，却因 > 682 被判超屏，mb-16/self-start 全部误启动）。
 const oneScreenH = ref(null);
 const contentEdWrap = ref(null);
-// 预览节点列表的手动高度（null = 跟随布局）
-const previewListH = ref(null);
-const previewCardEl = ref(null);
 // ⤢ 拉伸切换：false = 自适应（800 上限），true = 内容完整展开
 const edExpanded = ref(false);
 
@@ -326,9 +306,9 @@ const EDITOR_MIN = 140;
 const EDITOR_MAX = 3000;
 const JSON_GAP = 16; // 右列两张卡的 gap-4
 
-/** 三股需求的合成值；都不干预时不输出 style */
+/** 两股需求的合成值；都不干预时不输出 style */
 const gridMinH = computed(() => {
-    const vals = [edDragMinH.value, prevDragMinH.value, autoMinH.value].filter((v) => v != null);
+    const vals = [edDragMinH.value, autoMinH.value].filter((v) => v != null);
     return vals.length ? Math.max(...vals) : null;
 });
 
@@ -369,21 +349,6 @@ function startEdResize(e) {
         // 右列固有需求比压缩基线高几像素，差额会让 JSON 卡溢出 row 底部、
         // 两列底边错位。不低于一屏（680+2）保证向上缩时网格回得去。
         edDragMinH.value = Math.round(Math.max(682, infoChrome + h + JSON_GAP + jsonH0));
-    });
-}
-
-/** 预览列表手柄：拖动改列表显式高度，网格按「卡片头部 + 列表高」顶高 */
-function startPreviewResize(e) {
-    const card = previewCardEl.value;
-    const list = card?.querySelector('[data-preview-list]');
-    if (!card || !list) return;
-    const chrome = card.offsetHeight - list.offsetHeight; // 头部 + padding，拖动中不变
-    const startY = e.clientY;
-
-    beginDrag(e, (ev) => {
-        const h = Math.round(Math.max(120, (previewListH.value ?? list.offsetHeight) + ev.clientY - startY));
-        previewListH.value = h;
-        prevDragMinH.value = chrome + h;
     });
 }
 
@@ -449,12 +414,7 @@ function recomputeAuto() {
     const jsonChrome = json.offsetHeight - list.offsetHeight;
     const jsonNeed = jsonChrome + listContent;
     const rightNeed = Math.round(infoNeed + JSON_GAP + jsonNeed);
-
-    let leftNeed = 0;
-    if (previewListH.value != null && previewCardEl.value) {
-        leftNeed = previewCardEl.value.scrollHeight; // 手动模式卡片高度=内容
-    }
-    const need = Math.round(Math.max(rightNeed, leftNeed));
+    const need = Math.round(rightNeed);
     // over 判定：需求超过一屏基线（动态，随视口）才进拉伸态。
     // 容差 8px：flex 分配与需求测量天然差几个像素（flex 收缩 vs max-content），
     // 容差太小会让「恰好贴着一屏」的内容误触发拉伸态。

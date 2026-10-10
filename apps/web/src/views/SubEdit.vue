@@ -324,7 +324,6 @@ const edExpanded = ref(false);
 
 const EDITOR_MIN = 140;
 const EDITOR_MAX = 3000;
-const EDITOR_AUTO_MAX = 800; // 内容自适应上限：超过转为编辑器内部滚动
 const JSON_GAP = 16; // 右列两张卡的 gap-4
 
 /** 三股需求的合成值；都不干预时不输出 style */
@@ -430,24 +429,20 @@ function recomputeAuto() {
         : 0;
 
     const infoChrome = ed ? info.offsetHeight - ed.offsetHeight : 0;
-    // 编辑器需求：手动拖动值优先；自动模式测 CodeMirror 内容实高 ——
-    // 用 .cm-content 的 offsetHeight 而非 scrollHeight（后者在内容少于
-    // 可视时虚报为可视高，删内容后缩不回去，与 JSON 卡同坑）。
-    // clamp 到 [下限, 800]：超长内容不再无限撑高页面，转为编辑器内部滚动。
+    // 编辑器需求三分支：
+    //   · 手动拖动：edDragMinH 独立顶网格，不参与拉伸态判定（否则拖大会
+    //     误触发 jsonFlexNone，预览 self-start + mb-16，底边对齐被误破）
+    //   · 拉伸态（⤢ 切换）：内容完整展开（.cm-content 实高，不用 scrollHeight
+    //     —— 内容少时它虚报为可视高，同 JSON 卡坑），上限 EDITOR_MAX
+    //   · 默认态：EDITOR_MIN —— 编辑器保持新建空白时的紧凑尺寸，
+    //     内容多转编辑器内部滚动，不自动变高
     let edNeed = EDITOR_MIN;
     if (ed) {
         if (contentEdH.value != null) {
-            // 手动拖动：高度由 edDragMinH 独立顶网格，不参与拉伸态判定 ——
-            // 若把手动高度计入 rightNeed，拖大编辑器就会误触发 jsonFlexNone
-            // （预览 self-start + mb-16），底边对齐被误破。
             edNeed = EDITOR_MIN;
-        } else {
-            const cm = ed.querySelector('.cm-content');
-            const ch = (cm ? cm.offsetHeight : ed.scrollHeight) + 16;
-            // 拉伸态（⤢ 切换）：上限放开到 EDITOR_MAX 完整展开；
-            // 默认态：clamp 800，超长内容转编辑器内部滚动。
-            const cap = edExpanded.value ? EDITOR_MAX : EDITOR_AUTO_MAX;
-            edNeed = Math.min(Math.max(ch, EDITOR_MIN), cap);
+        } else if (edExpanded.value) {
+            const ch = (ed.querySelector('.cm-content')?.offsetHeight ?? 0) + 16;
+            edNeed = Math.min(Math.max(ch, EDITOR_MIN), EDITOR_MAX);
         }
     }
     const infoNeed = ed ? infoChrome + Math.max(EDITOR_MIN, edNeed) : info.scrollHeight;
@@ -487,17 +482,8 @@ function toggleEdExpand() {
 
 // 算子增删/改参、视口变化都会改变 JSON 卡内容需求 → 重算
 watch(() => form.process, () => nextTick(recomputeAuto), { deep: true });
-// 节点内容变化 → 编辑器内容需求变化 → 重算（手动模式不干预）。
-// debounce 200ms：输入是高频事件，recomputeAuto 读布局会触发 reflow。
-let edAutoTimer = null;
-watch(
-    () => form.content,
-    () => {
-        if (contentEdH.value != null) return;
-        clearTimeout(edAutoTimer);
-        edAutoTimer = setTimeout(() => nextTick(recomputeAuto), 200);
-    }
-);
+// 节点内容变化不重算：默认态编辑器保持紧凑尺寸（内容内滚），
+// 拉伸态高度由 ⤢ 点击时一次性算定
 onMounted(() => {
     nextTick(recomputeAuto);
     // 视口变化 → 一屏基线失效 → 先清顶高回一屏，重排后记新基线再重算

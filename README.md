@@ -24,13 +24,15 @@ SubPilot 服务端 ────────────────────�
         /download/*、/share/*   客户端直接拉取（只读分发密钥）
 ```
 
-> **默认转换后端**是作者自建的 SCE 实例，`SUB_BACKEND` 已预置该地址，开箱即用、
-> 公益免费（不承诺可用性，请勿滥用；有稳定性要求请换自建后端）。第三方声明见
-> [`NOTICE`](NOTICE) 与文末「许可」。
+**本项目默认后端**：https://subpilot.57995799.xyz/version
 
-**出处引用**：算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；
-格式转换由 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended) 提供。
-完整声明见 [`NOTICE`](NOTICE)。
+基于 **SubConverter-Extended**：https://github.com/Aethersailor/SubConverter-Extended
+
+该实例由作者自建、**公益免费提供**，`SUB_BACKEND` 已预置此地址，开箱即用；
+不承诺可用性与稳定性，请勿滥用，有稳定性要求请换自建后端。
+
+**出处引用**：算子链 DSL 与 Sub-Store（https://github.com/sub-store-org/Sub-Store）保持兼容；
+完整第三方声明见 `NOTICE` 与文末「许可」。
 
 <p align="center">
   <img src="shots/01-概览.png" width="49%" alt="概览" />
@@ -64,6 +66,28 @@ SubPilot 服务端 ────────────────────�
 | `env.*` 环境变量 | 进程环境变量 |
 
 ### 一、Docker（推荐）
+
+**快速方式（一条命令）**，适合先跑起来看看：
+
+```bash
+docker run -d --name subpilot --init \
+  -p 8795:8795 \
+  -e SUBPILOT_TOKEN='<你的令牌>' \
+  -v subpilot-data:/data \
+  ghcr.io/guanxi660-crypto/subpilot:0.1.13
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `-e SUBPILOT_TOKEN` | 访问令牌，唯一必填项 |
+| `-v subpilot-data:/data` | 具名卷存数据。用卷而不是挂宿主目录，可省掉改属主那一步 |
+| `-p 8795:8795` | 端口映射，左边是宿主机端口 |
+| `--init` | 以 tini 作 PID 1，优雅关闭才能把 WAL 落回主库 |
+
+然后打开 `http://<服务器>:8795`，输入上面的令牌登录。
+日常用 `docker logs -f subpilot` 看日志，`docker rm -f subpilot` 删除（卷里的保留）。
+
+正式部署建议用下面的 compose（便于固化配置、重启策略与健康检查）：
 
 完整可用的 `docker-compose.yml`：
 

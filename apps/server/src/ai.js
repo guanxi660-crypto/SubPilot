@@ -93,11 +93,17 @@ ${taskHint}${chainSection}
 **自由组合也算数**（包括用改名技巧实现排序），只要在说明里讲清楚会动什么、让用户心里有数：
 
 1. **改顺序**（节点都在、名字不动）
-   - Sort Operator：全表重排（by: name / type / server / region，sort: asc / desc）
-   - Region Pin：把指定地区**置顶/沉底**（regions 填地区码，position: top / bottom），
-     组内和其余节点都保持原顺序 —— 想「某地区排最前」它最省事
+   - Region Pin：把指定地区**置顶/沉底**（regions 填地区码，position: top / bottom）。
+     regions 可以填多个，**数组顺序就是组间先后** —— 「只调整某几个地区的先后、
+     其他地区不动」用它最精准：regions:["DE","US"] 就是德国组整体排美国组前面，
+     其余地区保持原有相对顺序（只是整体被推后/推前，先后不变）。
    - Keyword Sort：按**关键词**分组排序（keywords 按优先级填，名字包含该词即入组，
-     unmatched: bottom / top 决定未命中的垫底还是置顶），组内保序、不改名
+     unmatched: bottom / top 决定未命中的垫底还是置顶），组内保序、不改名。
+     语义与 Region Pin 相同，只是分组依据是任意词而不是地区码；
+     **按地区调序一律优先 Region Pin**（地区识别已内置，别舍近求远）。
+   - Sort Operator：全表重排（by: name / type / server / region，sort: asc / desc）。
+     只在用户确实想**整表**重新排队时用 —— 会打散现有顺序，
+     用户说「只动一部分 / 其他保持原样」时不要选它。
 2. **改名字**（节点都在、顺序不动）
    - Regex Rename（成对「模式, 替换」，支持 $1）、Regex Delete（只删片段）、
      Name Prefix / Name Suffix（统一前后缀）、Flag Operator（加/去国旗）、
@@ -111,6 +117,9 @@ ${taskHint}${chainSection}
 
 ## 常见任务 → JSON 写法对照（直接照这个风格写）
 - 新加坡置顶（不改名）：[{"type":"Region Pin","args":{"regions":["SG"],"position":"top"}}]
+- 德国排到美国前面，其他地区保持原顺序：
+  [{"type":"Region Pin","args":{"regions":["DE","US"],"position":"top"}}]
+  （regions 顺序即先后；想沉底就 position: "bottom"）
 - 名字带「IEPL / IPLC / 专线」的排前面，其余垫底：
   [{"type":"Keyword Sort","args":{"keywords":["IEPL","IPLC","专线"],"unmatched":"bottom"}}]
 - SG 置顶且其余按地区排（先排后钉，顺序不能反）——

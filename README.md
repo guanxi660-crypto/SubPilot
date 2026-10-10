@@ -170,8 +170,8 @@ docker compose down
 
 | 配置项 | 取值 |
 | --- | --- |
-| 启动命令 | `node apps/server/node/server.mjs` |
-| 监听端口 | 从环境变量 `PORT` 读取，默认 `8795` |
+| 启动命令 | `node index.js` —— 包根目录已带入口（转发到 `apps/server/node/server.mjs`）；`npm start` 等价 |
+| 监听端口 | **只有一个**：从环境变量 `PORT` 读取，默认 `8795`，平台注入的 `PORT` 自动生效 |
 | 必填环境变量 | `SUBPILOT_TOKEN` |
 | 持久化 | **必须挂一个持久卷并把 `DB_FILE` 指到卷内**，否则平台重启后数据全丢 |
 

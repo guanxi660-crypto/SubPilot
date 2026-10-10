@@ -61,6 +61,26 @@ for (const name of ['node', 'worker']) {
     } else {
         console.warn('! 未找到 apps/server/node_modules/yaml —— 用户需自行 npm install');
     }
+
+    // 入口约定：多数 Node 平台 / 容器默认找**根目录的 index.js**，或执行 npm start，
+    // 不会去跑 apps/server/node/server.mjs 这种深层路径。这里给一个转发壳。
+    // 真正的入口里 DB_FILE / ASSETS_DIR 都按自身位置解析（不是 cwd），
+    // 所以壳放在包根不会改变任何路径行为。
+    writeFileSync(
+        join(TMP, top, 'index.js'),
+        `// 入口转发：多数 Node 平台默认执行根目录的 index.js 或 npm start。
+// 真正的启动逻辑在 apps/server/node/server.mjs。
+import './apps/server/node/server.mjs';
+`,
+        'utf8',
+    );
+
+    // 打包后的 package.json 补上 main / start，让平台自动识别入口
+    const pkgPath = join(TMP, top, 'package.json');
+    const outPkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    outPkg.main = 'index.js';
+    outPkg.scripts = { ...(outPkg.scripts || {}), start: 'node index.js' };
+    writeFileSync(pkgPath, `${JSON.stringify(outPkg, null, 2)}\n`, 'utf8');
 }
 
 // ---- Worker 包：wrangler 配置（KV id 需部署者替换）----
@@ -96,16 +116,29 @@ for (const name of ['node', 'worker']) {
 }
 
 // ---- 压缩 ----
-// 注意 -Path 传目录本身（不要写成 dir\*）：带 \* 只会把内容打进 zip，
-// 解压后没有顶层目录名，两个包解到同一处会互相覆盖。
+// 注意传目录本身（不要写成 dir 下的内容）：带顶层目录名，解压后两个包不会互相覆盖。
+//
+// ⚠️ 不能用 PowerShell 的 Compress-Archive —— 它在 Windows 上把分隔符写成 `\`
+// （形如 `subpilot-0.1.13-node\index.js`）。Linux 解压时不认 `\` 作目录分隔符，
+// 会解出一堆名字里带反斜杠的平铺文件，入口直接找不到 —— 而 Render / Railway /
+// Koyeb 这类平台全是 Linux。改走 .NET 的 ZipFile.CreateFromDirectory，
+// 它写的是标准 `/`。
 const zip = (dirName) => {
     const src = join(TMP, dirName);
     const dst = join(OUT, `${dirName}.zip`);
     rmSync(dst, { force: true });
-    execFileSync('powershell', [
-        '-NoProfile', '-NonInteractive', '-Command',
-        `Compress-Archive -Path '${src}' -DestinationPath '${dst}' -Force`,
-    ], { stdio: 'inherit' });
+    try {
+        // tar -a 按扩展名自动选格式（.zip → zip），分隔符是标准 `/`
+        execFileSync('tar', ['-a', '-c', '-f', dst, '-C', TMP, dirName], { stdio: 'inherit' });
+    } catch {
+        // 兜底：没有 tar（或它不支持 zip）时回到 PowerShell。
+        // 注意这条路打出来的包在 Linux 上解压会摊平，仅作为应急。
+        console.warn('! tar 不可用，回退 Compress-Archive —— 建议在有 bsdtar 的环境出包');
+        execFileSync('powershell', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `Compress-Archive -Path '${src}' -DestinationPath '${dst}' -Force`,
+        ], { stdio: 'inherit' });
+    }
     return dst;
 };
 

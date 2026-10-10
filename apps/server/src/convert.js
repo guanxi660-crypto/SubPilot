@@ -175,6 +175,9 @@ function sanitizePrefixValue(v) {
 function sourceLabel(snap, ref) {
     const stored = snap.subs.find((x) => x.name === ref);
     if (stored) return stored.displayName || stored.name || '';
+    // 组合名也可能出现在这里（单来源递交时按组合的显示名建 provider）
+    const col = (snap.collections || []).find((x) => x.name === ref);
+    if (col) return col.displayName || col.name || '';
     try {
         return new URL(ref).hostname;
     } catch {
@@ -183,9 +186,11 @@ function sourceLabel(snap, ref) {
 }
 
 /**
- * 给一条来源 URL 包上 SCE 扩展前缀。
- * 仅在**多来源**递交时使用：单来源没有命名必要（就一个 provider）。
- * 不支持该语法的 target（如 singbox）原样返回 —— SCE 会把前缀当成 URL 的一部分。
+ * 给一条来源 URL 包上 SCE 扩展前缀（`tag:标签,provider:名称,URL`）。
+ * 单来源与多来源**都**用：单来源也要一个命名的 provider 分组，而不是无名的一坨。
+ * ⚠️ 该前缀是 subconverter 的扩展语法，**只有 clash 系（Provider 格式）的
+ * target 认它**（见 SCE_PREFIX_TARGETS）—— 其余 target（singbox 等）原样返回，
+ * 否则 SCE 会把前缀当成 URL 的一部分。
  */
 function decorateSourceUrl(url, label, target) {
     const base = String(target || '').split('&')[0].toLowerCase();
@@ -371,13 +376,19 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
                     400,
                 );
             }
-            sceParams.url = feedUrl;
+            // 单来源也带 provider:显示名 —— 与多来源同语义，让转换结果里有一个
+            // 命名分组（clash 系 target 才认该前缀，其余 target 原样返回）。
+            const label = sub
+                ? sourceLabel(snap, sub.name)
+                : collection
+                  ? sourceLabel(snap, collection.name)
+                  : sourceLabel(snap, sources[0]?.ref);
+            sceParams.url = decorateSourceUrl(feedUrl, label, sceParams.target);
         }
     } else {
         // 不本地处理：把原始地址交给 SCE，保留它的 Provider / 原生远程资源模式。
-        // 多来源时逐条带上 tag:/provider: 前缀（显示名作 provider 名）——
+        // 单来源也逐条带上 tag:/provider: 前缀（显示名作 provider 名）——
         // 否则 SCE 生成的 provider 是无名的，zashboard 里分不清哪条是哪条。
-        const multi = sources.length > 1;
         const urls = [];
         for (const s of sources) {
             const stored = snap.subs.find((x) => x.name === s.ref);
@@ -386,10 +397,10 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
                     return fail(`订阅「${stored.name}」是本地内容，必须走本地处理（请去掉 direct=1）`, 400);
                 }
                 for (const u of toStringArray(stored.url)) {
-                    urls.push(multi ? decorateSourceUrl(u, sourceLabel(snap, s.ref), sceParams.target) : u);
+                    urls.push(decorateSourceUrl(u, sourceLabel(snap, s.ref), sceParams.target));
                 }
             } else {
-                urls.push(multi ? decorateSourceUrl(s.ref, sourceLabel(snap, s.ref), sceParams.target) : s.ref);
+                urls.push(decorateSourceUrl(s.ref, sourceLabel(snap, s.ref), sceParams.target));
             }
         }
         sceParams.url = urls.join('|');

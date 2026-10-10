@@ -20,6 +20,11 @@ import { runPipeline, previewText, fetchSubText } from './pipeline.js';
 import { buildLinks, resolveSourceRefs, adhocSpec } from './convert.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
 import { handleTemplates } from './templates.js';
+// 版本号单一事实来源 = apps/server/package.json。
+// 之前在 utils/env 里硬编码 '0.1.0'，升 package.json 版本号它纹丝不动
+// （左下角一直 v0.1.0 的 bug 就这么来的）。wrangler/esbuild 打包时会把
+// JSON 内联；Node 直跑（server.mjs）需要 import attributes，Node 20.10+ 支持。
+import serverPkg from '../package.json' with { type: 'json' };
 
 const SUB_FIELDS = ['name', 'displayName', 'source', 'url', 'content', 'ua', 'process', 'remark'];
 const FILE_FIELDS = ['name', 'displayName', 'source', 'url', 'content'];
@@ -174,7 +179,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         const probe = await probeBackend(base);
         return ok({
             backend: 'SubPilot',
-            version: '0.1.0',
+            version: serverPkg.version,
             subBackend: base,
             sceVersion: probe.version,
             online: probe.online,

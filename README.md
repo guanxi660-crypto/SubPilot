@@ -137,25 +137,24 @@ docker compose down
 
 ### 二、Cloudflare Worker（一键部署）
 
-点下面的按钮，授权 GitHub 与 Cloudflare 后会自动拉仓库并创建 Worker，全程网页操作：
+点下面的按钮，授权 GitHub 与 Cloudflare，其余都在网页上完成：
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/guanxi660-crypto/SubPilot)
 
-按钮只负责「授权 + 建 Worker」，下面两件事它不会替你做，建完补上即可：
+部署表单里**只有一个必填项**：
 
-```bash
-cd apps/server
-npx wrangler kv namespace create DATA -c wrangler.jsonc
-npx wrangler secret put SUBPILOT_TOKEN -c wrangler.jsonc
-```
-
-| 步骤 | 说明 |
+| 表单项 | 怎么填 |
 | --- | --- |
-| 建 KV 命名空间 | **把命令输出的 id 填回 `wrangler.jsonc`**，否则数据存不下 |
-| 设访问令牌 | 不设置时所有受保护接口一律 401（fail-closed） |
-| 填构建命令 | 前端要先构建，平台的构建命令填 `npm run build`（产物目录 `apps/web/dist`） |
+| 项目名称 | 默认 `subpilot`，可改 |
+| `SUBPILOT_TOKEN` | **唯一要填的**。填一个随机串（建议 `openssl rand -hex 24`），这就是登录令牌 |
+| `SUB_BACKEND` / `TZ` / `DB_FILE` | 已预填默认值，**不用动** |
+| 启用预构建 | 保持开启（部署时自动构建前端） |
 
-之后本地也能继续部署：
+点「部署」即可，KV 等资源由部署流程按 `wrangler.jsonc` 的声明自动创建并绑定。
+完成后打开分配的 `*.workers.dev` 地址（或你绑定的自定义域），输入刚才填的
+`SUBPILOT_TOKEN` 登录。
+
+之后想用本地 wrangler 管理同一个 Worker：
 
 ```bash
 cd apps/server

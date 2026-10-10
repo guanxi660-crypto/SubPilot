@@ -36,6 +36,8 @@ mkdirSync(OUT, { recursive: true });
 
 const copy = (from, to) => cpSync(join(ROOT, from), join(TMP, to), { recursive: true });
 const files = ['README.md', 'LICENSE', 'NOTICE', '.env.example'];
+// 根目录入口（index.js）随包一起给：平台默认执行的就是它
+const nodeFiles = ['index.js', 'Dockerfile', 'docker-compose.yml'];
 
 // ---- 通用部分：后端源码 + 前端产物 ----
 for (const name of ['node', 'worker']) {
@@ -51,7 +53,9 @@ for (const name of ['node', 'worker']) {
     const top = `subpilot-${VERSION}-node`;
     copy('apps/server/node', `${top}/apps/server/node`);
     copy('package.json', `${top}/package.json`);
-    for (const f of ['Dockerfile', 'docker-compose.yml', 'DEPLOY.md']) {
+    // ⚠️ 不要把 DEPLOY.md 打进包：那是本地运维记录（真实域名 / 账号 / 部署历史），
+    // 已 gitignore，绝不能随发布包外流。
+    for (const f of nodeFiles) {
         if (existsSync(join(ROOT, f))) copy(f, `${top}/${f}`);
     }
     // 运行时唯一依赖：yaml（wrangler 等 devDependencies 一律不进包）
@@ -62,25 +66,6 @@ for (const name of ['node', 'worker']) {
         console.warn('! 未找到 apps/server/node_modules/yaml —— 用户需自行 npm install');
     }
 
-    // 入口约定：多数 Node 平台 / 容器默认找**根目录的 index.js**，或执行 npm start，
-    // 不会去跑 apps/server/node/server.mjs 这种深层路径。这里给一个转发壳。
-    // 真正的入口里 DB_FILE / ASSETS_DIR 都按自身位置解析（不是 cwd），
-    // 所以壳放在包根不会改变任何路径行为。
-    writeFileSync(
-        join(TMP, top, 'index.js'),
-        `// 入口转发：多数 Node 平台默认执行根目录的 index.js 或 npm start。
-// 真正的启动逻辑在 apps/server/node/server.mjs。
-import './apps/server/node/server.mjs';
-`,
-        'utf8',
-    );
-
-    // 打包后的 package.json 补上 main / start，让平台自动识别入口
-    const pkgPath = join(TMP, top, 'package.json');
-    const outPkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    outPkg.main = 'index.js';
-    outPkg.scripts = { ...(outPkg.scripts || {}), start: 'node index.js' };
-    writeFileSync(pkgPath, `${JSON.stringify(outPkg, null, 2)}\n`, 'utf8');
 }
 
 // ---- Worker 包：wrangler 配置（KV id 需部署者替换）----

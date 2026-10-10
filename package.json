@@ -1,9 +1,10 @@
 {
     "name": "subpilot",
-    "version": "0.1.13",
+    "version": "0.1.14",
     "private": true,
     "type": "module",
-    "description": "SubPilot —— 面向 SubConverter-Extended 的订阅管理控制台（订阅 / JSON 脚本处理 / 组合 / 文件分享 / AI 助手 / 同步），单 Cloudflare Worker 部署",
+    "main": "index.js",
+    "description": "SubPilot —— 一体化订阅管理面板：订阅管理 / 节点拼接 / 格式转换 / 文件与文档管理 / AI 助手，可部署到 Cloudflare Worker 或自建 Node / Docker",
     "license": "AGPL-3.0-only",
     "engines": {
         "node": ">=22.5"
@@ -14,7 +15,7 @@
         "dev:web": "cd apps/web && npm run dev",
         "build": "cd apps/web && npm run build",
         "deploy": "npm run build && cd apps/server && npm run deploy",
-        "start": "cd apps/server && npm run start",
+        "start": "node index.js",
         "docker:build": "docker build -t subpilot .",
         "docker:up": "docker compose up -d --build",
         "docker:down": "docker compose down"

@@ -164,16 +164,23 @@ docker compose down
 
 ### 三、Node / 免费容器平台（zip 上传）
 
-适合 Render、Railway、Koyeb、Zeabur、Northflank 这类「传代码或传包就跑」的免费平台。
-到 [Releases](../../releases) 下载 `subpilot-<版本>-node.zip`（内含后端源码、Node 适配层、
-前端产物与运行时依赖 `yaml`，解压即跑），上传到平台后：
+适合 Render、Railway、Koyeb、Zeabur、Northflank 这类「传包就跑」的平台。
 
-| 配置项 | 取值 |
-| --- | --- |
-| 启动命令 | `node index.js` —— 包根目录已带入口（转发到 `apps/server/node/server.mjs`）；`npm start` 等价 |
-| 监听端口 | **只有一个**：从环境变量 `PORT` 读取，默认 `8795`，平台注入的 `PORT` 自动生效 |
-| 必填环境变量 | `SUBPILOT_TOKEN` |
-| 持久化 | **必须挂一个持久卷并把 `DB_FILE` 指到卷内**，否则平台重启后数据全丢 |
+1. 到 [Releases](../../releases) 下载 `subpilot-<版本>-node.zip`，解压后把**整个目录**
+   传上去。目录里带后端源码、Node 适配层、前端产物、运行时依赖 `yaml`，
+   以及根目录的 `index.js` 入口。
+2. 启动命令填 `node index.js`（填 `npm start` 也一样）。
+3. 环境变量**要自己填**，平台不会替你填：
+
+| 变量 | 必填 | 填什么 |
+| --- | --- | --- |
+| `SUBPILOT_TOKEN` | ✅ | 登录令牌，随机串（建议 `openssl rand -hex 24`）或 UUID |
+| `PORT` | ✅ | **平台要求监听哪个端口就填哪个**（常见 `3000` / `8080` / `10000`；平台没要求就填 `8795`）。不填默认 `8795`，若与平台期望的端口不一致，健康检查会失败 |
+| `DB_FILE` | ✅（要留数据） | 指到挂载卷里，如 `/data/subpilot.db`。**不挂卷、也不指过去，平台重启后数据全丢** |
+| `HOST` | ❌ | 默认已是 `0.0.0.0`。**不要改成 `127.0.0.1`**，否则容器外部访问不到 |
+| `SUB_BACKEND` | ❌ | 留空即用公益默认后端；想换自建实例再填 |
+
+> 只需要暴露**一个**端口，就是上面 `PORT` 那个 —— 服务只监听它，另外开 8795 没有用。
 
 平台若支持直接用 Dockerfile，把 zip 换成「选本仓库 + 自动识别 Dockerfile」更省事，
 配置与上面一致。

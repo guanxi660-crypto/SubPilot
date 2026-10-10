@@ -1,11 +1,3 @@
-// 同步：把整站快照备份到 Gist 或 WebDAV，并支持从云端恢复。
-//
-// 放在服务端而不是浏览器：
-//   · WebDAV 基本不给浏览器发 CORS 头，前端直连必然被拦
-//   · Token / 应用密码存服务端 KV，不下发浏览器
-//
-// SSRF 防护是硬要求：WebDAV 地址由用户填写，必须挡住内网与云元数据地址，
-// 否则这个功能会变成一个任意请求代理。
 
 import { fail, ok, isPlainObject, maskSecret } from './util.js';
 import { loadSnapshot, mutate } from './storage.js';
@@ -16,17 +8,11 @@ const BACKUP_FILE = 'subpilotx-backup.json';
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const SYNC_TIMEOUT = 20000;
 
-/**
- * 带超时的 fetch。
- *
- * 同步的两个目标都在本站之外（GitHub API / 用户自建的网盘），任何一侧挂住
- * 都会把这次请求一直吊着 —— 用户在页面上只看到转圈，没有任何反馈。
- * 其余模块（pipeline / sce / telegram）都带超时，这里此前是漏的。
- */
+
 async function fetchWithTimeout(url, init = {}, timeoutMs = SYNC_TIMEOUT, ssrf = {}) {
     try {
-        // safeFetch 会逐跳校验重定向目标 —— 同步目标返回 302 指向内网地址时
-        // 不会被悄悄跟随（审计 M2）。
+        
+        
         return await safeFetch(
             url,
             { ...init, signal: AbortSignal.timeout(timeoutMs) },
@@ -40,27 +26,18 @@ async function fetchWithTimeout(url, init = {}, timeoutMs = SYNC_TIMEOUT, ssrf =
     }
 }
 
-// ---------------------------------------------------------------- SSRF 防护
 
-// 具体实现在 netguard.js —— 那里是全站统一的出网守卫，WebDAV 只是它的一个
-// 调用方（审计 M2：此前这份实现只服务于 WebDAV，而 /sub、/api/preview/* 等
-// 同样会拉取用户提供的地址，却完全没有校验）。
 
-/**
- * WebDAV 的守卫选项。
- *
- * 默认**只允许 https**：WebDAV 走明文等于把应用密码交给中间人。
- * 但内网自建网盘（NAS）基本都是明文 http —— 所以开了逃生开关
- * （SUBPILOT_ALLOW_PRIVATE_FETCH=1）时一并放行 http，否则那个开关对内网
- * WebDAV 等于没用。
- */
+
+
+
 function webdavGuard(env) {
     const o = ssrfOptions(env, { label: 'WebDAV 地址' });
     o.allowHttp = o.allowPrivate;
     return o;
 }
 
-// ---------------------------------------------------------------- Gist
+
 
 async function gistRequest(cfg, { method = 'GET', path = '', body } = {}) {
     const res = await fetchWithTimeout(`https://api.github.com${path}`, {
@@ -106,11 +83,11 @@ async function gistBackup(env, snap) {
     try {
         j = JSON.parse(text);
     } catch {
-        /* ignore */
+        
     }
     if (!gistId && j.id) {
         gistId = j.id;
-        // 首次备份自动记下 Gist ID，否则下次会又建一个新的
+        
         await mutate(env, (s) => {
             s.settings.sync.gist.gistId = gistId;
         });
@@ -141,7 +118,7 @@ async function gistRestore(env) {
     if (!file) return fail('Gist 里没有找到备份文件', 400);
 
     let raw = file.content || '';
-    // 超过 1MB 时 API 只给截断内容，改走 raw 链接
+    
     if (file.truncated && file.raw_url) {
         let r2;
         try {
@@ -155,7 +132,7 @@ async function gistRestore(env) {
     return applyBundle(env, raw);
 }
 
-// ---------------------------------------------------------------- WebDAV
+
 
 function davHeaders(cfg) {
     return {
@@ -177,7 +154,7 @@ async function davTest(env) {
     const bad = await checkUrl(cfg.url, webdavGuard(env));
     if (bad) return fail(bad, 400);
     try {
-        // PROPFIND 深度 0：能返回 207 就说明认证与路径都对
+        
         const res = await fetchWithTimeout(
             davUrl(cfg),
             { method: 'PROPFIND', headers: { ...davHeaders(cfg), Depth: '0' } },
@@ -205,7 +182,7 @@ async function davBackup(env) {
     if (payload.length > MAX_BACKUP_BYTES) return fail('备份体积超过 20MiB 上限', 413);
 
     try {
-        // 目录可能不存在，MKCOL 失败（405/409 已存在）无所谓，继续 PUT
+        
         if (cfg.dir) {
             await fetchWithTimeout(
                 davUrl(cfg),
@@ -256,7 +233,7 @@ async function davRestore(env) {
     }
 }
 
-// ---------------------------------------------------------------- 公共入口
+
 
 async function applyBundle(env, raw) {
     let parsed;
@@ -268,8 +245,8 @@ async function applyBundle(env, raw) {
     if (!isPlainObject(parsed) || parsed.app !== 'SubPilot') {
         return fail('备份文件格式不匹配（缺少 app: "SubPilot" 标记）', 400);
     }
-    // mutate() 内部已经写过一次 KV 了，这里不要再写第二遍 ——
-    // 快照是单键整包序列化，重复写等于把每次恢复的耗时翻倍，收益为零。
+    
+    
     const { result } = await mutate(env, (s) => mergeBundle(s, parsed));
     return ok(result);
 }
@@ -282,8 +259,8 @@ export async function handleSync(request, env, ctx, { method, path }) {
         const s = snap.settings.sync;
         return ok({
             provider: s.provider,
-            // 必须带上掩码：前端占位符写的是「已保存（<mask>），留空不修改」，
-            // 少了掩码就会渲染成「已保存（undefined）」——不报错，但一眼假。
+            
+            
             gist: {
                 gistId: s.gist.gistId,
                 hasToken: !!s.gist.token,

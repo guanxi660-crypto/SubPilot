@@ -1,29 +1,8 @@
-// JSON 算子链：用一份 JSON 描述「对订阅节点做什么」。
-//
-// 设计取向 —— 这层只做**节点级**变换（筛选 / 排序 / 重命名 / 打标），
-// 格式转换一律交给 SubConverter-Extended。边界清晰的好处是：
-//   · 算子只依赖 name / type / server / port，不需要理解各协议的字段细节
-//   · 输出仍是标准节点列表，SCE 那边照常处理
-//
-// 算子以数组形式串联，前一个的输出是后一个的输入：
-//   [{ "type": "Regex Filter", "args": { "regex": ["(?i)剩余|流量"], "mode": "exclude" } },
-//    { "type": "Sort Operator", "args": { "sort": "asc", "by": "region" } }]
-//
-// ⚠️ 不支持任意 JS 脚本（Script Operator）：Workers 禁 eval / new Function。
-//    遇到该类型会明确报错，而不是静默跳过 —— 静默跳过会让人以为脚本生效了。
-
 import { renameNode, regionOf, flagOf, REGIONS } from './nodes.js';
 import { isPlainObject } from './util.js';
 
 const MAX_NODES = 20000;
 
-// ---------------------------------------------------------------- 正则
-
-/**
- * 把用户写的字符串编译成正则。
- * 兼容 Sub-Store 习惯的 `(?i)` 内联标记 —— JS 原生不支持，
- * 这里剥出来转成 i 标志，否则整条正则直接抛 SyntaxError。
- */
 function buildRegex(pattern, fallbackFlags = '') {
     let p = String(pattern ?? '');
     let flags = fallbackFlags;
@@ -43,17 +22,6 @@ function asArray(v) {
     return [String(v)];
 }
 
-// ---------------------------------------------------------------- 工具
-
-/**
- * 名称里已有的旗帜 emoji（两个区域指示符拼成一面国旗）。
- *
- * 刻意准备两个正则，因为 test 和 replace 对 g 标志的要求正好相反：
- *   · test 用的**不能**带 g —— 带 g 的正则会把 lastIndex 留在对象上，
- *     同一个正则反复 test 会跳着匹配（一次 true 一次 false）；
- *   · replace 用的**必须**带 g —— 否则一个名字里有多面国旗时只删得掉第一面，
- *     与「去掉已有国旗」的语义不符。
- */
 const EMOJI_RE = /[\u{1F1E6}-\u{1F1FF}]{2}/u;
 const EMOJI_GLOBAL_RE = /[\u{1F1E6}-\u{1F1FF}]{2}/gu;
 
@@ -62,21 +30,19 @@ function typeOf(n) {
 }
 
 function pickStr(s, patterns, modes) {
-    // patterns 为正则数组，任一命中即算命中
+    
     for (const p of patterns) {
         try {
             if (buildRegex(p).test(s)) return true;
         } catch {
-            /* 非法正则忽略 */
+            
         }
     }
     return false;
 }
 
-// ---------------------------------------------------------------- 单算子
-
 const HANDLERS = {
-    /** 按名称正则保留 / 排除 */
+    
     'Regex Filter'(nodes, args) {
         const patterns = asArray(args.regex);
         const mode = args.mode === 'exclude' ? 'exclude' : 'keep';
@@ -87,7 +53,7 @@ const HANDLERS = {
         });
     },
 
-    /** 按地区保留 / 排除（地区靠名称关键词判定，见 nodes.js 的 regionOf） */
+    
     'Region Filter'(nodes, args) {
         const want = asArray(args.regions).map((s) => s.toUpperCase());
         const mode = args.mode === 'exclude' ? 'exclude' : 'keep';
@@ -99,7 +65,7 @@ const HANDLERS = {
         });
     },
 
-    /** 按协议类型保留 / 排除 */
+    
     'Type Filter'(nodes, args) {
         const want = asArray(args.types).map((s) => s.toLowerCase());
         const mode = args.mode === 'exclude' ? 'exclude' : 'keep';
@@ -110,7 +76,7 @@ const HANDLERS = {
         });
     },
 
-    /** 丢掉缺关键字段的节点（无 server / 无 port / 名称含"剩余流量"等占位信息） */
+    
     'Useless Filter'(nodes) {
         return nodes.filter((n) => {
             if (!n.server) return false;
@@ -122,17 +88,17 @@ const HANDLERS = {
         });
     },
 
-    /** 正则重命名：args.regex 是「模式, 替换」成对的扁平数组 */
+    
     'Regex Rename'(nodes, args) {
-        // ⚠️ 这里**不能**用 asArray：它会把空串过滤掉，而「替换成空串」正是最常用的
-        // 删改写法（削前缀、去尾巴）。空串一旦被吃掉，整个 pairs 数组就左移错位 ——
-        // 模式变成替换文本、末尾那个替换文本又没有配对的模式，结果是**静默改错名字**。
-        // 更隐蔽的情形是数组只剩 1 个元素，循环条件 i + 1 < 1 直接不成立，整步变成 no-op
-        // （内置模板原来的「削机场前缀」就踩了这个坑，一直没生效）。
+        
+        
+        
+        
+        
         const pairs = Array.isArray(args.regex) ? args.regex.map((x) => String(x ?? '')) : [];
         for (let i = 0; i + 1 < pairs.length; i += 2) {
             const re = pairs[i];
-            // 空模式会匹配每个字符间隙，把替换文本插得到处都是，必须跳过
+            
             if (!re) continue;
             const repl = pairs[i + 1];
             for (const n of nodes) {
@@ -140,14 +106,14 @@ const HANDLERS = {
                     const next = n.name.replace(buildRegex(re, 'g'), repl);
                     if (next !== n.name) renameNode(n, next);
                 } catch {
-                    /* 非法正则忽略 */
+                    
                 }
             }
         }
         return nodes;
     },
 
-    /** 从名称里删掉匹配片段（只改名字，不删节点） */
+    
     'Regex Delete'(nodes, args) {
         const patterns = asArray(args.regex);
         for (const n of nodes) {
@@ -156,7 +122,7 @@ const HANDLERS = {
                 try {
                     name = name.replace(buildRegex(p, 'g'), '');
                 } catch {
-                    /* ignore */
+                    
                 }
             }
             name = name.replace(/\s{2,}/g, ' ').trim();
@@ -165,7 +131,7 @@ const HANDLERS = {
         return nodes;
     },
 
-    /** 名称前缀 / 后缀 */
+    
     'Name Prefix'(nodes, args) {
         const v = String(args.value ?? '');
         if (!v) return nodes;
@@ -179,7 +145,7 @@ const HANDLERS = {
         return nodes;
     },
 
-    /** 排序：by 支持 name / type / server / region，sort 支持 asc / desc */
+    
     'Sort Operator'(nodes, args) {
         const by = String(args.by || 'name');
         const dir = args.sort === 'desc' ? -1 : 1;
@@ -190,7 +156,7 @@ const HANDLERS = {
             if (by === 'region') {
                 const c = regionOf(n.name);
                 const idx = REGIONS.findIndex((r) => r.code === c);
-                // 未识别地区排最后
+                
                 return idx < 0 ? 'zz' : String(idx).padStart(3, '0');
             }
             return n.name || '';
@@ -204,12 +170,7 @@ const HANDLERS = {
         return sorted;
     },
 
-    /**
-     * 地区置顶 / 沉底：把指定地区的节点挪到列表最前（或最后）。
-     * 和 Sort Operator 的区别：Sort 是全表重排，这个是**分区**——
-     * 命中的归一组、其余归一组，两组各自保持原有相对顺序，名字一个都不动。
-     * regions 的先后就是优先级（先填的排更前），靠稳定排序实现。
-     */
+    
     'Region Pin'(nodes, args) {
         const want = asArray(args.regions).map((s) => s.toUpperCase());
         if (!want.length) return nodes;
@@ -221,19 +182,13 @@ const HANDLERS = {
             const code = regionOf(n.name);
             (code && rank.has(code) ? hit : rest).push(n);
         }
-        // Array#sort 在现行所有主流引擎里都是稳定的：组内按 regions 先后排，
-        // 同优先级的保持原有顺序
+        
+        
         hit.sort((a, b) => rank.get(regionOf(a.name)) - rank.get(regionOf(b.name)));
         return pos === 'top' ? [...hit, ...rest] : [...rest, ...hit];
     },
 
-    /**
-     * 关键词排序：给一组关键词，节点名**包含**第 i 个关键词的归第 i 组，
-     * 组间按关键词先后排，组内保持原有相对顺序（稳定分区，不改名）。
-     * 同时命中多个关键词时归入优先级最高（数组里最靠前）的那组；
-     * 未命中任何关键词的统一垫底（unmatched: bottom，默认）或置顶（top）。
-     * 匹配大小写不敏感 —— 「IEPL」「iepl」算同一个词。
-     */
+    
     'Keyword Sort'(nodes, args) {
         const kws = asArray(args.keywords).map((k) => k.toLowerCase()).filter(Boolean);
         if (!kws.length) return nodes;
@@ -243,7 +198,7 @@ const HANDLERS = {
             const name = String(n.name || '').toLowerCase();
             let best = Infinity;
             for (let i = 0; i < kws.length; i++) {
-                // 命中即记组号，但要继续扫完 —— 更靠前的关键词优先级更高
+                
                 if (i < best && name.includes(kws[i])) best = i;
             }
             rank.set(n, best);
@@ -251,12 +206,12 @@ const HANDLERS = {
         const hit = [];
         const rest = [];
         for (const n of nodes) (rank.get(n) < Infinity ? hit : rest).push(n);
-        // Array#sort 稳定：同优先级的保持原有顺序
+        
         hit.sort((a, b) => rank.get(a) - rank.get(b));
         return unmatched === 'top' ? [...rest, ...hit] : [...hit, ...rest];
     },
 
-    /** 重名处理：rename 加序号，delete 只留第一个 */
+    
     'Handle Duplicate'(nodes, args) {
         const action = args.action === 'delete' ? 'delete' : 'rename';
         const seen = new Map();
@@ -283,7 +238,7 @@ const HANDLERS = {
         return out;
     },
 
-    /** 按地区加国旗 emoji；mode=remove 则去掉已有国旗 */
+    
     'Flag Operator'(nodes, args) {
         const mode = args.mode === 'remove' ? 'remove' : 'add';
         for (const n of nodes) {
@@ -299,18 +254,14 @@ const HANDLERS = {
         return nodes;
     },
 
-    /** 截断：只保留前 N 个（from=tail 保留后 N 个） */
+    
     'Limit Operator'(nodes, args) {
         const limit = Math.max(0, parseInt(args.limit, 10) || 0);
         if (!limit) return nodes;
         return args.from === 'tail' ? nodes.slice(-limit) : nodes.slice(0, limit);
     },
 
-    /**
-     * 快速设置：批量改 UDP / TFO / 跳过证书验证。
-     * 只对 Clash 形态生效 —— URI 形态要改这些字段得逐协议重编码查询串，
-     * 容易把节点改坏；那种需求应该走转换页的 udp/scv/tfo 参数交给 SCE 处理。
-     */
+    
     'Quick Settings'(nodes, args, log) {
         const keys = ['udp', 'tfo', 'skip-cert-verify'];
         const want = {};
@@ -337,14 +288,6 @@ const HANDLERS = {
     },
 };
 
-// ---------------------------------------------------------------- 入口
-
-/**
- * 执行算子链。
- * @param {Array} nodes  解析后的节点数组（会被原地修改，调用方先克隆）
- * @param {Array} process 算子数组
- * @returns {{nodes:Array, log:string[]}}
- */
 export function applyOperators(nodes, process) {
     const log = [];
     let cur = Array.isArray(nodes) ? nodes : [];
@@ -363,7 +306,7 @@ export function applyOperators(nodes, process) {
         }
         const handler = HANDLERS[op.type];
         if (!handler) {
-            // Script Operator 单独给出可操作的解释，别让人以为"写了没生效"
+            
             if (/script/i.test(op.type)) {
                 log.push(
                     `${label}：不支持任意 JS 脚本（Workers 运行时禁 eval）。` +
@@ -390,21 +333,6 @@ export function applyOperators(nodes, process) {
     return { nodes: cur, log };
 }
 
-// ---------------------------------------------------------------- UI 元数据
-
-/**
- * 算子类型表。前端「快速添加」清单与参数表单都由它驱动，
- * 避免前端再抄一份类型名（抄一份就一定会漂移）。
- */
-/**
- * 算子类型表 —— 前端「添加算子」与展开区的说明面板都读这里。
- *
- * 字段含义：
- *   desc     一行摘要，下拉菜单里显示
- *   usage    展开后的使用说明：什么时候用、每个参数怎么填（小白主要看这个）
- *   args     默认参数。新加算子时原样带过去，所以它同时就是「能跑起来的样例」——
- *            单独再写一份 example 只会和它重复（早先就有这个问题，已删掉）。
- */
 export const OPERATOR_TYPES = [
     {
         type: 'Regex Filter',
@@ -568,29 +496,6 @@ export const OPERATOR_TYPES = [
     },
 ];
 
-/**
- * 内置模板（只读）。
- *
- * 曾经是 4 条各自独立的模板，用户得挨个套用、来回切换才能凑齐一条完整链 ——
- * 而且套第二次会**整条覆盖**前一次的结果（applyPreset 是覆盖语义），
- * 所以「先套清理、再套排序」实际等于「只套了排序」。合并成一条后不存在这个坑。
- *
- * 链内顺序不是随便排的，每一步都依赖前一步的结果：
- *   1) 过滤：先把假节点（剩余流量/官网/到期提醒）摘掉，后面的算子才不用为它们兜底
- *   2) 改名：先削掉广告尾巴，再削掉「机场名 | 」前缀，顺手把削完留下的多余空格压掉
- *   3) 去重：必须排在改名**之后** —— 改名会把原本不同的名字削成同一个，先去的重不算数
- *   4) 排序：按地区聚拢（`by: 'region'`，与名字前缀无关，所以放在加国旗前后都成立）
- *   5) 国旗：放最后，避免 emoji 被前面的「去掉 | 之前的内容」这类正则误伤
- *
- * 第 2 步里的「削前缀」和「压空格」合成了一个 Regex Rename：它的 regex 是**扁平数组、
- * 两两一组**（见 HANDLERS 里的 for (i = 0; i + 1 < len; i += 2)），塞两组进去与拆成
- * 两个算子**执行顺序和结果完全相同**（都是「先整条链跑第一对、再整条链跑第二对」）。
- * 拆成两条时卡片标题、图标、说明全一样，折叠后只差一行 JSON，看着像重复了。
- *
- * 刻意**不含 Region Filter**：地区取舍是最因人而异的一步（有人要港台日新美、
- * 有人只要一个区），写死在内置模板里会误删用户真正想要的节点。
- * 要筛地区请自己加一个「地区筛选」算子，或存成自定义模板。
- */
 export const PROCESS_PRESETS = [
     {
         name: '一键整理（推荐）',
@@ -599,7 +504,7 @@ export const PROCESS_PRESETS = [
             { type: 'Useless Filter', args: {} },
             { type: 'Regex Filter', args: { regex: ['(?i)剩余|流量|到期|过期|官网|订阅|续费|客服|群组'], mode: 'exclude' } },
             { type: 'Regex Delete', args: { regex: ['(?i)\\s*[|｜]\\s*(剩余|流量|官网).*$'] } },
-            // 两组替换：① 削掉「机场名 | 」前缀 ② 把连续空格压成一个
+            
             { type: 'Regex Rename', args: { regex: ['^[^|｜]*[|｜]\\s*', '', '\\s{2,}', ' '] } },
             { type: 'Handle Duplicate', args: { action: 'rename' } },
             { type: 'Sort Operator', args: { sort: 'asc', by: 'region' } },

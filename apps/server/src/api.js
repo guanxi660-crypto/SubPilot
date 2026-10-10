@@ -1,18 +1,3 @@
-// /api/* 的 REST 处理器。
-//
-// 约定（很重要，前端依赖它）：
-//   **集合类写操作**（订阅 / 组合 / 文件 / 成品 / 模板）返回
-//   `{ status:'success', data: <更新后的完整集合> }`。
-//   前端直接用返回值覆盖本地状态，因此不受 KV 最终一致性的影响 ——
-//   写完立刻读也不会读到旧数据。读接口只用于首次加载与跨设备刷新。
-//
-//   少数写操作返回的是**该动作自身的局部结果**，不是集合：
-//     · POST /api/shares        → 新建的那一条分享码
-//     · POST /api/feedkey/rotate→ { rotatedAt }
-//     · POST /api/settings      → 脱敏后的设置对象
-//     · POST /api/backup/import → 合并统计 { added, updated, skipped, settingsUpdated, warnings }
-//   这些操作不影响前端缓存的集合，所以不套用上面那条约定。
-
 import {
     ok,
     fail,
@@ -31,10 +16,7 @@ import { runPipeline, previewText, fetchSubText } from './pipeline.js';
 import { buildLinks, resolveSourceRefs, adhocSpec, publicBase, convertedBackendLink } from './convert.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
 import { handleTemplates, sanitizeProcess } from './templates.js';
-// 版本号单一事实来源 = apps/server/package.json。
-// 之前在 utils/env 里硬编码 '0.1.0'，升 package.json 版本号它纹丝不动
-// （左下角一直 v0.1.0 的 bug 就这么来的）。wrangler/esbuild 打包时会把
-// JSON 内联；Node 直跑（server.mjs）需要 import attributes，Node 20.10+ 支持。
+
 import serverPkg from '../package.json' with { type: 'json' };
 
 const SUB_FIELDS = ['name', 'displayName', 'source', 'url', 'content', 'ua', 'process', 'remark'];
@@ -48,39 +30,18 @@ const ALLOWED_FILE_EXT = [
 ];
 const MAX_FILE_BYTES = 512 * 1024;
 
-/**
- * 本地订阅正文上限（审计 M5）。
- *
- * 此前只有文件和成品有上限（512KiB / 16MiB），**唯独订阅正文是敞开的** ——
- * 而它恰恰是最容易被塞进大东西的地方（机场节点列表、整份规则集）。
- * Cloudflare KV 单个 value 上限 25MiB，快照是「几个数组 + 一份设置」整包序列化，
- * 一条超限订阅就足以让 `writeSnapshot` 失败 → `mutate()` 抛异常 → 该次写操作 500，
- * 而且失败点可能在业务逻辑已执行之后，观感是「提示失败但部分状态已变」。
- *
- * 取 8MiB：比成品（16MiB）小一档，因为快照里装的是**所有**订阅之和；
- * 又比文件（512KiB）大一档，因为真实订阅正文经常有几 MB。
- */
 const MAX_SUB_BYTES = 8 * 1024 * 1024;
 
-// ---------------------------------------------------------------- 小工具
-
-/**
- * 文件正文的**字节数**。
- * 必须和 MAX_FILE_BYTES 同口径 —— 用 String.length 数的是 UTF-16 码元，
- * 一份全中文的 JSON 会被低估到实际体积的 1/3，于是「512KB 上限」形同虚设。
- */
 function fileBytes(content) {
     return new TextEncoder().encode(String(content ?? '')).length;
 }
 
-/** 人类可读的体积，用于报错文案（不追求精确，够用户判断「超了多少」） */
 function fmtBytes(n) {
     if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MiB`;
     if (n >= 1024) return `${Math.round(n / 1024)}KiB`;
     return `${n}B`;
 }
 
-/** 订阅正文超限用 413，其余校验失败用 400 —— 前端据此区分提示语气 */
 function subErrorStatus(body) {
     return fileBytes(body?.content) > MAX_SUB_BYTES ? 413 : 400;
 }
@@ -93,7 +54,6 @@ async function readJson(request) {
     }
 }
 
-/** 数组集合的排序落库：body 是名称数组，未列出的排在后面（保持相对顺序） */
 function applyOrder(list, names) {
     const index = new Map(names.map((n, i) => [n, i]));
     return [...list].sort((a, b) => {
@@ -103,25 +63,6 @@ function applyOrder(list, names) {
     });
 }
 
-// ---------------------------------------------------------------- 成品的固定分享链接
-
-/**
- * 保证某个成品有一条**固定**的分享链接（就地改传入的 snapshot，不落库 —— 由调用方的 mutate 负责）。
- *
- * 为什么成品不用「点一次生成一次」那套：
- * 成品的链接会被嵌进客户端配置长期使用。若每次重新转换保存都换一条新码，
- * 所有人手里的订阅都会在某天突然失效，还得重新分发一遍。
- * 所以成品的链接是「保存即定下、之后永不变」的。
- *
- * 幂等语义（这是本函数的关键）：
- *   ① 已经有一条 → **原样复用它的 code**，URL 不变；
- *   ② 有多条（历史遗留，以前每个成品可以点多次「生成链接」）→ 只保留**最早的那条**
- *      （最可能已经被分发出去，删它比删新的更安全），其余回收；
- *   ③ 一条都没有 → 新建一条。
- *
- * 顺手把 `expiresAt` 归一成 null：固定链接不能自己到期，
- * 否则「不变」只是假象 —— 某天客户端会突然拉不到，而且没人会想到是链接过期了。
- */
 function ensureConvertedShare(s, name) {
     const mine = (s.shares || []).filter((sh) => sh.type === 'converted' && sh.name === name);
     if (!mine.length) {
@@ -129,7 +70,7 @@ function ensureConvertedShare(s, name) {
         s.shares.push({ code, type: 'converted', name, createdAt: nowIso(), expiresAt: null, uses: 0 });
         return code;
     }
-    // 按创建时间取最早的一条；时间相同（或缺失）时退化为数组顺序，保证结果稳定
+    
     const keep = mine.reduce((a, b) => ((a.createdAt || '') <= (b.createdAt || '') ? a : b));
     keep.expiresAt = null;
     if (mine.length > 1) {
@@ -139,16 +80,6 @@ function ensureConvertedShare(s, name) {
     return keep.code;
 }
 
-/**
- * 给成品列表项补上 `shareCode` 与 `link`。
- *
- * 前端要的是「卡片上直接显示 / 复制链接」，所以两者必须跟着列表一起来 ——
- * 否则每渲染一次卡片都得再拉一遍 /api/shares，多一次往返还容易读到旧快照。
- *
- * `link` 是**成品链接**（活链 —— 保存时存下的那条后端地址，见 convert.js 的
- * convertedBackendLink），也就是成品卡片上「⧉ 分享链接」复制出来的那条；
- * TG 推送成品时用的是同一个函数产出的地址，两边不可能漂移。
- */
 function withShareCode(snap, { content, ...rest }, { request, env } = {}) {
     const hit = (snap.shares || []).find((sh) => sh.type === 'converted' && sh.name === rest.name);
     const shareCode = hit?.code || '';
@@ -166,7 +97,6 @@ function withShareCode(snap, { content, ...rest }, { request, env } = {}) {
     };
 }
 
-/** 对外暴露设置时抹掉密钥，只回 has* 标记 */
 export function publicSettings(settings) {
     const s = JSON.parse(JSON.stringify(settings || {}));
     const ai = s.ai || {};
@@ -192,8 +122,8 @@ export function publicSettings(settings) {
             passMask: maskSecret(sync.webdav?.pass),
         },
     };
-    // TG 的 bot token 同样是凭据。publicSettings 被 /api/settings 和备份导出共用，
-    // 这里漏一遍，明文就会从唯一的下发口流出去 —— 而且备份文件还会带着它跑。
+    
+    
     const tg = s.telegram || {};
     s.telegram = {
         tokenSet: !!tg.token,
@@ -207,10 +137,6 @@ export function publicSettings(settings) {
     return s;
 }
 
-// maskSecret 已统一到 util.js —— 此前这里和 telegram.js 各有一套（4+4 与 6+4），
-// 同一个凭据在两页显示出的掩码不同。见 util.js 的说明。
-
-/** 合并设置：空串 / 掩码占位符 = 保留原值（用户没改这一项） */
 function mergeSecret(incoming, current) {
     if (typeof incoming !== 'string') return current;
     const t = incoming.trim();
@@ -218,13 +144,11 @@ function mergeSecret(incoming, current) {
     return t;
 }
 
-// ---------------------------------------------------------------- 处理器
-
 export async function handleApi(request, env, ctx, { method, path, query }) {
     const seg = path.replace(/^\/api\/?/, '').split('/').filter(Boolean);
     const body = method === 'GET' || method === 'DELETE' ? {} : await readJson(request);
 
-    // ---- 环境 / 元数据 ----
+    
 
     if (method === 'GET' && seg[0] === 'utils' && seg[1] === 'env') {
         const snap = await loadSnapshot(env);
@@ -250,8 +174,8 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
     }
 
     if (method === 'GET' && seg[0] === 'operators') {
-        // templates = 用户自定义模板。内置预设放在 presets 里（代码常量，不落库）。
-        // 编辑器一次请求就能把「类型表 + 内置模板 + 自定义模板」全拿到。
+        
+        
         const snap = await loadSnapshot(env);
         return ok({
             types: OPERATOR_TYPES,
@@ -261,12 +185,12 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         });
     }
 
-    // ---- 自定义模板 ----
+    
     if (seg[0] === 'templates' || seg[0] === 'template') {
         return handleTemplates(env, { method, seg, body });
     }
 
-    // ---- 分发链接 ----
+    
 
     if (seg[0] === 'link' && method === 'GET') {
         const kind = query.get('kind') === 'col' ? 'col' : 'sub';
@@ -278,9 +202,9 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         return ok(await buildLinks(request, env, snap, { kind, name, target }));
     }
 
-    // 多来源临时选择的分发链接：转换页勾了 2 个以上来源时用。
-    // 这组选择没有名字可以寻址，所以后端把它折成一个 adhoc spec，
-    // 再走和单来源同一套派生密钥 —— 不占分享码，也不需要落库。
+    
+    
+    
     if (seg[0] === 'link' && method === 'POST') {
         const snap = await loadSnapshot(env);
         const sources = resolveSourceRefs(snap, body.sources);
@@ -293,7 +217,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         );
     }
 
-    // 轮换分发密钥：让所有已发出的 /feed、/download 链接立即失效
+    
     if (seg[0] === 'feedkey' && seg[1] === 'rotate' && method === 'POST') {
         const { snap } = await mutate(env, (s) => {
             s.settings.feedSalt = randId(24);
@@ -302,7 +226,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         return ok({ rotatedAt: snap.settings.feedSaltCreatedAt });
     }
 
-    // ---- 订阅 ----
+    
 
     if (seg[0] === 'subs' && method === 'GET') {
         const snap = await loadSnapshot(env);
@@ -334,13 +258,13 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 const idx = s.subs.findIndex((x) => x.name === name);
                 if (idx < 0) return { error: `订阅不存在：${name}`, status: 404 };
                 const mergedInput = { ...s.subs[idx], ...pick(body, SUB_FIELDS) };
-                // 校验**合并后的结果**，不是请求体（审计 M5，与 PATCH /api/file 同款缺口）：
-                // 「只改备注」的请求里没有 content，但库里那条本身可能已经超限；
-                // 「把远程订阅改成 local 再贴上 30MiB 正文」更是从请求体的字面看不出来。
+                
+                
+                
                 const verr = validateSub({ ...mergedInput, name });
                 if (verr) return { error: verr, status: subErrorStatus(mergedInput) };
                 const merged = normalizeSub(mergedInput, s.subs[idx]);
-                merged.name = name; // 改名走单独的 rename 接口
+                merged.name = name; 
                 merged.createdAt = s.subs[idx].createdAt;
                 merged.updatedAt = nowIso();
                 s.subs[idx] = merged;
@@ -354,14 +278,14 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 const idx = s.subs.findIndex((x) => x.name === name);
                 if (idx < 0) return { error: `订阅不存在：${name}`, status: 404 };
                 s.subs.splice(idx, 1);
-                // 主动把该名称从所有组合里摘掉，避免留下悬空引用
+                
                 let touched = 0;
                 for (const c of s.collections) {
                     const before = c.subscriptions.length;
                     c.subscriptions = c.subscriptions.filter((n) => n !== name);
                     if (c.subscriptions.length !== before) touched += 1;
                 }
-                // 顺带回收该订阅的分享码
+                
                 s.shares = s.shares.filter((sh) => !(sh.type === 'sub' && sh.name === name));
                 return { touched };
             });
@@ -386,7 +310,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
             }
             item.name = newName;
             item.updatedAt = nowIso();
-            // 组合按名称引用，改名后要跟着改
+            
             let touched = 0;
             for (const c of s.collections) {
                 const i = c.subscriptions.indexOf(oldName);
@@ -395,7 +319,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                     touched += 1;
                 }
             }
-            // 分享码里的名称同步更新，否则旧分享链接会指向不存在的订阅
+            
             for (const sh of s.shares) {
                 if (sh.type === 'sub' && sh.name === oldName) sh.name = newName;
             }
@@ -412,7 +336,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         return ok(snap.subs);
     }
 
-    // ---- 组合 ----
+    
 
     if (seg[0] === 'collections' && method === 'GET') {
         const snap = await loadSnapshot(env);
@@ -467,16 +391,16 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         return ok(snap.collections);
     }
 
-    // ---- 文件 ----
+    
 
     if (seg[0] === 'files' && method === 'GET') {
         const snap = await loadSnapshot(env);
-        // 列表不带正文，避免一次拉几百 KB
+        
         return ok(snap.files.map(({ content, ...rest }) => ({ ...rest, size: fileBytes(content) })));
     }
 
-    // 单个文件的完整记录（含正文）。路径段用单数 file，与集合 /api/files 并列；
-    // 此前叫 wholeFile，是全站唯一一处 camelCase 路径段。
+    
+    
     if (seg[0] === 'file' && seg[1] && method === 'GET') {
         const snap = await loadSnapshot(env);
         const name = decodeURIComponent(seg[1]);
@@ -511,11 +435,11 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                     { ...s.files[idx], ...incoming, name: newName },
                     s.files[idx],
                 );
-                // 校验**合并后的结果**，不能只在改名时校验。
-                // 之前这里只在 newName !== name 时调 validateFile，于是「不改名」的
-                // PATCH 完全跳过校验 —— 扩展名白名单、512KB 上限、以及审计 L2 的
-                // 远程地址协议限制，全都能用一个同名的 PATCH 绕过去（实测：
-                // PATCH {source:'remote', url:'javascript:alert(1)'} 会被原样存下）。
+                
+                
+                
+                
+                
                 const verr = validateFile(merged);
                 if (verr) return { error: verr, status: 400 };
                 merged.createdAt = s.files[idx].createdAt;
@@ -549,11 +473,11 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         return ok(snap.files.map(({ content, ...rest }) => ({ ...rest, size: fileBytes(content) })));
     }
 
-    // ---- 预览 ----
+    
 
     if (seg[0] === 'preview' && seg[1] === 'sub' && method === 'POST') {
-        // normalizeSub 放在 try 里面：它现在会因为正文超限抛 ApiError（审计 M5），
-        // 抛在外面就没有对应的 catch，会被入口翻成 500。
+        
+        
         try {
             const sub = normalizeSub(body);
             let text = '';
@@ -573,7 +497,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
     }
 
     if (seg[0] === 'preview' && seg[1] === 'process' && method === 'POST') {
-        // 脚本处理页的实时预览：可以贴正文，也可以给一个远程地址
+        
         const process = Array.isArray(body.process) ? body.process : [];
         try {
             let text = String(body.content || '');
@@ -602,13 +526,13 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         }
     }
 
-    // ---- 成品卡 ----
+    
 
     if (seg[0] === 'converted') {
         if (method === 'GET' && seg.length === 1) {
             const snap = await loadSnapshot(env);
-            // 老成品可能没有分享码（「保存即分发」机制上线前保存的）——
-            // 列表时顺手补建。ensureConvertedShare 幂等：已有码的成品原样保留。
+            
+            
             const missing = snap.converted.some(
                 (c) => !(snap.shares || []).some((sh) => sh.type === 'converted' && sh.name === c.name),
             );
@@ -627,9 +551,9 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
             if (typeof body.content !== 'string' || !body.content) return fail('成品内容为空', 400);
             const bytes = new TextEncoder().encode(body.content).length;
             if (bytes > 16 * 1024 * 1024) return fail('成品内容超过 16MiB 上限', 413);
-            // 活链（2026-10-10 改定）：前端把产出面板那条「成品链接」（这次转换实际
-            // 打到的后端地址）随保存一起交上来存住 —— 卡片复制 / TG 推送都原样用它，
-            // 三处同源。可空（target=raw 没有后端链接）；重存不带它视为清空。
+            
+            
+            
             const backendUrl = String(body.backendUrl || '').trim();
             if (backendUrl) {
                 if (!/^https?:\/\//i.test(backendUrl)) return fail('成品链接必须是 http(s) 地址', 400);
@@ -648,7 +572,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 };
                 if (idx >= 0) s.converted[idx] = item;
                 else s.converted.unshift(item);
-                // 保存即分发：链接在这一步就定下来，之后重转重存都不会变
+                
                 ensureConvertedShare(s, name);
             });
             return ok(snap.converted.map((c) => withShareCode(snap, c, { request, env })), 201);
@@ -663,7 +587,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                     const idx = s.converted.findIndex((c) => c.name === name);
                     if (idx < 0) return { error: '卡片不存在', status: 404 };
                     s.converted.splice(idx, 1);
-                    // 顺带回收该成品的分享码，否则 /api/shares 里会留下指向空资源的死链
+                    
                     s.shares = s.shares.filter((sh) => !(sh.type === 'converted' && sh.name === name));
                     return {};
                 });
@@ -673,7 +597,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         }
     }
 
-    // ---- 分享码 ----
+    
 
     if (seg[0] === 'shares') {
         if (method === 'GET') {
@@ -682,8 +606,8 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         }
         if (method === 'POST') {
             const type = String(body.type || '');
-            // converted（转换成品）也能分享：它就是一份已生成的最终产物，
-            // /share/converted/… 直接把它原样吐出去，不需要再走一次转换。
+            
+            
             if (!['sub', 'col', 'file', 'converted'].includes(type)) {
                 return fail('分享类型必须是 sub / col / file / converted', 400);
             }
@@ -727,7 +651,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         }
     }
 
-    // ---- 统计 ----
+    
 
     if (seg[0] === 'stats') {
         if (method === 'GET') {
@@ -738,9 +662,9 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 total: items.reduce((a, b) => a + b.count, 0),
                 itemCount: new Set(items.map((i) => `${i.type}|${i.item}`)).size,
                 ipCount: ips.size,
-                // 上限可见化（审计 M5）：条目数长期贴着上限时，用户需要知道
-                // 「记录被裁剪过」。没有这两个字段的话，数据莫名变少只会让人
-                // 以为是 bug，而不是「到上限了」。
+                
+                
+                
                 entries: items.length,
                 limit: MAX_STATS_ITEMS,
                 dropped: Number(stats.dropped) || 0,
@@ -753,7 +677,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         }
     }
 
-    // ---- 设置 ----
+    
 
     if (seg[0] === 'settings') {
         if (method === 'GET') {
@@ -803,7 +727,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         }
     }
 
-    // ---- 备份导入 / 导出（本地通道，不依赖 Gist / WebDAV）----
+    
 
     if (seg[0] === 'backup' && seg[1] === 'export' && method === 'GET') {
         const snap = await loadSnapshot(env);
@@ -816,8 +740,8 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         if (!isPlainObject(incoming) || incoming.app !== 'SubPilot') {
             return fail('备份文件格式不匹配（缺少 app: "SubPilot" 标记）', 400);
         }
-        // mutate() 内部已经写过一次 KV，这里不要再写第二遍 ——
-        // 快照是单键整包序列化，重复写等于把每次导入的耗时翻倍，收益为零。
+        
+        
         const { result } = await mutate(env, (s) => mergeBundle(s, incoming));
         return ok(result);
     }
@@ -825,25 +749,6 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
     return fail(`未知接口：${method} ${path}`, 404);
 }
 
-// ---------------------------------------------------------------- 备份结构
-
-/**
- * 可进备份的设置子集（审计 L3）。
- *
- * 与 `publicSettings` 的区别在**用途**：后者是「给前端看的」，凭据字段被换成
- * `hasApiKey` / `tokenSet` / `*Mask` 之类的标记，值全丢了 —— 拿它当备份内容，
- * 导入时能恢复的信息量为零（这正是审计 L3 说的「导出了但从不恢复」）。
- * 这里要的是「能原样恢复的一份子集」：不含任何凭据，但字段值是真的。
- *
- * 为什么不干脆把凭据也导出去：备份会落到 Gist / 网盘 / 用户下载的 JSON 里，
- * 那等于把 AI Key、Bot Token、网盘密码复制到几个不受控的地方。所以凭据一律
- * 不进备份，导入侧对这几个字段**保持本机现值不动**。
- *
- * 明确排除：
- *   · feedSalt（轮换它会让所有已发出的 /feed、/download 链接立即失效）
- *   · ai.apiKey / sync.gist.token / sync.webdav.pass / telegram.token
- *   · telegram.lastPush（运行态，不是配置）
- */
 export function exportableSettings(settings) {
     const s = isPlainObject(settings) ? settings : {};
     const ai = isPlainObject(s.ai) ? s.ai : {};
@@ -884,23 +789,14 @@ export function exportBundle(snap) {
         collections: snap.collections,
         files: snap.files,
         converted: snap.converted.map((c) => ({ ...c })),
-        // 自定义算子模板一起带走 —— 它是用户手调的成果，丢了比丢一条订阅更烦
+        
         templates: (snap.templates || []).map((t) => ({ ...t })),
-        // 设置里的**非凭据**字段一起带走，导入时按字段合并（审计 L3）。
-        // 凭据（AI Key / Gist Token / 网盘密码 / Bot Token）永不进备份。
+        
+        
         settings: exportableSettings(snap.settings),
     };
 }
 
-/**
- * 按字段合并设置（审计 L3）。只认非凭据字段，凭据一律不动本机现值。
- *
- * `provider` 是个例外：它本身不是凭据，但切过去之后依赖对应凭据存在。
- * 所以切完要检查本机有没有那个凭据，没有就明确警告 —— 否则用户会看到
- * 「自动同步已开启」却一直失败，还以为是网络问题。
- *
- * @returns {number} 实际写入的字段数
- */
 function mergeSettings(cur, inc, stats) {
     if (!isPlainObject(inc)) return 0;
     let n = 0;
@@ -923,7 +819,7 @@ function mergeSettings(cur, inc, stats) {
                 n += 1;
             }
         }
-        // apiKey 不在备份里，保持本机现值
+        
     }
 
     if (isPlainObject(inc.sync)) {
@@ -938,7 +834,7 @@ function mergeSettings(cur, inc, stats) {
                     n += 1;
                 }
             }
-            // pass 不在备份里，保持本机现值
+            
         }
         if (['none', 'gist', 'webdav'].includes(inc.sync.provider)) {
             cur.sync.provider = inc.sync.provider;
@@ -969,7 +865,7 @@ function mergeSettings(cur, inc, stats) {
             n += 1;
         }
         if (Array.isArray(tg.targets)) {
-            // 只收合法形状：导入文件是外部输入，别让脏数据进到推送循环里
+            
             cur.telegram.targets = tg.targets
                 .filter(
                     (t) =>
@@ -981,35 +877,16 @@ function mergeSettings(cur, inc, stats) {
                 .map((t) => ({ kind: t.kind, name: t.name }));
             n += 1;
         }
-        // token 不在备份里，保持本机现值
+        
     }
 
     return n;
 }
 
-/**
- * 合并备份：按 name 合并，**同名以云端/导入文件为准**，本站多余项保留。
- * 是合并而非覆盖 —— 覆盖会静默丢掉用户在本站新建的内容。
- *
- * 除了五张表，现在还合并**设置里的非凭据字段**（审计 L3）：导出侧给的是
- * exportableSettings() 的结果，导入侧对凭据（AI Key / Gist Token / 网盘密码 /
- * Bot Token）保持本机现值不动 —— 备份文件不该成为凭据副本。
- */
 export function mergeBundle(snap, incoming) {
     const stats = { added: 0, updated: 0, skipped: 0, settingsUpdated: 0, warnings: [] };
 
-    /**
-     * 导入项的统一净化。
-     *
-     * 备份文件是**外部输入**：可能来自旧版本，可能是手工改过的 JSON，也可能
-     * 干脆是别人给的。而写入路径有 validateSub / validateFile / sanitizeProcess
-     * 把关，导入路径此前一个都没有（审计 L3 / M5）—— 一份坏备份能直接落库，
-     * 落进去之后每次保存都要把这份脏数据再写一遍。
-     *
-     * 这里统一处理三类问题：名称非法（会破坏 URL 路径语义）、正文超限
-     * （KV 单值 25MiB，超了就是整个快照写失败）、算子链结构不合法。
-     * 一律**跳过 + 记一条 warning**，不静默丢弃。
-     */
+    
     const guard = (item, kind, { maxLen = 0 } = {}) => {
         const nameErr = validateName(item.name, { maxLen });
         if (nameErr) {
@@ -1019,7 +896,7 @@ export function mergeBundle(snap, incoming) {
         return true;
     };
 
-    /** 算子链净化：结构不合法就清空（运行时 applyOperators 会跳过非法项，但别让它进库） */
+    
     const guardProcess = (item) => {
         if (item.process === undefined) return true;
         const clean = sanitizeProcess(item.process);
@@ -1062,10 +939,10 @@ export function mergeBundle(snap, incoming) {
             stats.warnings.push(`跳过订阅「${item.name}」：正文约 ${fmtBytes(size)}，超过 8MiB 上限`);
             return false;
         }
-        // 与写入路径（normalizeSub）同语义：远程订阅的正文一律清空。不收敛的话，
-        // 一份把节点正文塞进远程订阅的备份会把它原样带进来 —— 白占体积，
-        // 还会让「远程订阅只备份地址，不缓存节点正文」这条说明变成假话。
-        // 赋空串而不是 delete 键：记录形状要和 normalizeSub 产出的完全一致。
+        
+        
+        
+        
         if (item.source !== 'local') item.content = '';
         return guardProcess(item);
     });
@@ -1082,7 +959,7 @@ export function mergeBundle(snap, incoming) {
             stats.warnings.push(`跳过文件「${item.name}」：正文约 ${fmtBytes(size)}，超过 512KiB 上限`);
             return false;
         }
-        // 同上：远程文件不存正文（normalizeFile 的 source 缺省是 local，所以按 remote 判）
+        
         if (item.source === 'remote') item.content = '';
         return true;
     });
@@ -1094,7 +971,7 @@ export function mergeBundle(snap, incoming) {
         (item) => guard(item, '成品卡', { maxLen: 64 }),
     );
 
-    // 模板的算子链**必须**合法：它是「用户手调的成果」，进来一条坏链子还不如没有
+    
     mergeList(snap.templates, incoming.templates, ['name', 'desc', 'process'], (item) => {
         if (!guard(item, '模板', { maxLen: 40 })) return false;
         const clean = sanitizeProcess(item.process);
@@ -1107,11 +984,11 @@ export function mergeBundle(snap, incoming) {
         return true;
     });
 
-    // 设置按字段合并（审计 L3）：导出侧给的是非凭据子集，导入侧对凭据保持本机现值
+    
     stats.settingsUpdated = mergeSettings(snap.settings, incoming.settings, stats);
 
-    // 导入的模板可能撞上内置模板名（对方版本不同、或手工改过备份文件）。
-    // 留着会导致下拉里出现两个同名项，套用哪个全凭运气 —— 直接剔除并告知。
+    
+    
     const builtin = new Set(PROCESS_PRESETS.map((p) => p.name));
     const collided = snap.templates.filter((t) => builtin.has(t.name)).map((t) => t.name);
     if (collided.length) {
@@ -1120,7 +997,7 @@ export function mergeBundle(snap, incoming) {
         stats.warnings.push(`以下自定义模板与内置模板重名，已跳过：${collided.join('、')}`);
     }
 
-    // 悬空引用检查：组合里引用了不存在的订阅时明确列出来，别让它悄悄坏掉
+    
     const subNames = new Set(snap.subs.map((s) => s.name));
     for (const c of snap.collections) {
         const missing = (c.subscriptions || []).filter((n) => !subNames.has(n));
@@ -1131,16 +1008,14 @@ export function mergeBundle(snap, incoming) {
     return stats;
 }
 
-// ---------------------------------------------------------------- 归一化 / 校验
-
 function normalizeSub(input, prev = {}) {
     const source = input.source === 'local' ? 'local' : 'remote';
     const content = source === 'local' ? String(input.content ?? prev.content ?? '') : '';
 
-    // 第二道闸（审计 M5）。validateSub 是第一道，走 API 的正常路径到不了这里；
-    // 但**备份导入**以及将来新增的调用点都可能绕过它。与其静默写进一份超限正文
-    // （KV 单值 25MiB，超了就是整个快照写失败），不如在这里直接抛 —— 抛出的
-    // ApiError 会穿过 mutate 的回调，由 index.js 统一翻成 413。
+    
+    
+    
+    
     const size = fileBytes(content);
     if (size > MAX_SUB_BYTES) {
         const name = String(input.name ?? prev.name ?? '').trim();
@@ -1164,7 +1039,7 @@ function normalizeSub(input, prev = {}) {
 function validateSub(body) {
     const nameErr = validateName(body?.name);
     if (nameErr) return nameErr;
-    // 体积上限（审计 M5）。与文件 / 成品同口径用**字节数**，不用 String.length。
+    
     const size = fileBytes(body?.content);
     if (size > MAX_SUB_BYTES) {
         return `订阅正文超过 8MiB 上限（当前约 ${fmtBytes(size)}）`;
@@ -1230,14 +1105,13 @@ function validateFile(body) {
     if (body?.source === 'remote') {
         const u = String(body?.url || '').trim();
         if (!u) return '远程文件需要填写地址';
-        // 只允许 http(s)：分享出口是 302 跳转（convert.js 的 /share/file），
-        // 放行其它协议等于把分享链接变成开放重定向 / 脚本载体（审计 L2）
+        
+        
         if (!/^https?:\/\//i.test(u)) return '远程文件地址必须以 http:// 或 https:// 开头';
     }
     return '';
 }
 
-/** 取扩展名；无扩展名或扩展名超过 8 位非字母数字一律视为无扩展名 */
 export function extOf(name) {
     const base = String(name || '').split(/[?#]/)[0];
     const dot = base.lastIndexOf('.');
@@ -1252,7 +1126,7 @@ function computeExpiry(options) {
     if (kind === 'date') {
         const d = String(options.date || '');
         if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
-        // 当天 23:59:59 失效
+        
         return new Date(`${d}T23:59:59`).toISOString();
     }
     const days = Math.max(1, parseInt(options.days, 10) || 7);

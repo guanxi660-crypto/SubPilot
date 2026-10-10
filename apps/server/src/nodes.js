@@ -1,14 +1,3 @@
-// 节点解析与序列化。
-//
-// 支持两种输入形态，处理后**原样回到同一形态**（不混用，避免信息丢失）：
-//   ① URI 列表（ss:// vmess:// trojan:// …，可能是 Base64 包裹的整包）
-//   ② Clash / Mihomo YAML（proxies: 数组）
-//
-// 处理过程中只需要 name / type / server / port 四个字段做筛选排序重命名，
-// 但重命名必须写回原始载体，所以两种形态各留一份原始数据：
-//   uri   → node.raw（原始行）
-//   clash → node.obj（原始 proxy 对象）
-
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { b64decode, b64encode, looksLikeBase64 } from './util.js';
 
@@ -18,14 +7,11 @@ const KNOWN_SCHEMES = [
     'socks', 'socks5', 'http', 'https', 'wireguard', 'ssh', 'mieru',
 ];
 
-// ---------------------------------------------------------------- 格式嗅探
-
-/** @returns {'uri-base64'|'uri'|'clash'|'empty'|'unknown'} */
 export function detectFormat(text) {
     const t = String(text ?? '').trim();
     if (!t) return 'empty';
-    // Clash YAML：有 proxies: 键（允许行首缩进），或整体是个 JSON 对象。
-    // 缩进用 [ \t] 而不是 \s —— \s 含换行，会让匹配跨行滑到别处去。
+    
+    
     if (/(^|\n)[ \t]*proxies[ \t]*:/m.test(t)) return 'clash';
     if (t.startsWith('{') && /"proxies"\s*:/.test(t)) return 'clash';
     if (t.includes('://')) return 'uri';
@@ -35,8 +21,6 @@ export function detectFormat(text) {
     }
     return 'unknown';
 }
-
-// ---------------------------------------------------------------- URI 解析
 
 function splitUri(line) {
     const idx = line.indexOf('://');
@@ -81,11 +65,6 @@ function hostPort(s) {
     return { host: hp.slice(0, c), port: parseInt(hp.slice(c + 1), 10) || 0 };
 }
 
-/**
- * 解析单条 URI。失败返回 null（调用方过滤掉）。
- * 解析不出的字段一律给安全默认值 —— 面板的职责是展示与筛选，
- * 不是校验节点可用性，宁可显示得糙一点也不要整条丢掉。
- */
 export function parseUri(line, index = 0) {
     const raw = String(line || '').trim();
     const parts = splitUri(raw);
@@ -99,7 +78,7 @@ export function parseUri(line, index = 0) {
     let extra = {};
 
     if (scheme === 'vmess') {
-        // vmess://base64(JSON)
+        
         const obj = safeJson(b64decode(rest));
         if (!obj) return null;
         type = 'vmess';
@@ -108,7 +87,7 @@ export function parseUri(line, index = 0) {
         port = parseInt(obj.port, 10) || 0;
         extra = obj;
     } else if (scheme === 'ssr') {
-        // ssr://base64(host:port:protocol:method:obfs:base64pass/?params)
+        
         const dec = b64decode(rest);
         if (!dec) return null;
         const [main, paramStr = ''] = dec.split('/?');
@@ -123,13 +102,13 @@ export function parseUri(line, index = 0) {
         let s = rest;
         const at = s.lastIndexOf('@');
         if (at < 0) {
-            // 整体是 base64(method:pass@host:port)
+            
             const dec = b64decode(s);
             if (dec.includes('@')) s = dec;
             else return null;
         } else {
             const ui = s.slice(0, at);
-            // SIP002：userinfo 单独 base64
+            
             if (!ui.includes(':')) {
                 const dec = b64decode(ui);
                 if (dec.includes(':')) s = dec + s.slice(at);
@@ -181,12 +160,6 @@ function safeJson(s) {
     }
 }
 
-// ---------------------------------------------------------------- 解析入口
-
-/**
- * 把订阅正文解析成节点数组。
- * @returns {{format:'uri'|'clash'|'unknown', nodes:Array, error?:string}}
- */
 export function parseNodes(text) {
     const fmt = detectFormat(text);
     if (fmt === 'empty') return { format: 'unknown', nodes: [], error: '内容为空' };
@@ -212,7 +185,7 @@ export function parseNodes(text) {
         }
     }
 
-    // URI 形态（含 base64 整包）
+    
     const body = fmt === 'uri-base64' ? b64decode(text) : text;
     const nodes = [];
     for (const rawLine of body.split(/[\r\n]+/)) {
@@ -226,9 +199,6 @@ export function parseNodes(text) {
     return { format: 'uri', nodes };
 }
 
-// ---------------------------------------------------------------- 重命名
-
-/** 把节点名写回原始载体（uri 改 raw，clash 改 obj.name） */
 export function renameNode(node, newName) {
     node.name = newName;
     if (node.format === 'clash') {
@@ -257,7 +227,7 @@ function rewriteUriName(line, type, name) {
             return `ssr://${b64urlRaw(`${main}/?${params.toString()}`)}`;
         }
     }
-    // 其余协议名称都在 fragment 上，直接替换
+    
     const h = line.indexOf('#');
     const base = h >= 0 ? line.slice(0, h) : line;
     return `${base}#${encodeURIComponent(name)}`;
@@ -267,9 +237,6 @@ function b64urlRaw(str) {
     return b64encode(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-// ---------------------------------------------------------------- 序列化
-
-/** 节点数组 → 可再被订阅客户端/转换后端消费的正文 */
 export function serializeNodes(nodes, format) {
     if (format === 'clash') {
         const proxies = nodes.map((n) => n.obj || { name: n.name, type: n.type, server: n.server, port: n.port });
@@ -278,7 +245,6 @@ export function serializeNodes(nodes, format) {
     return b64encode(nodes.map((n) => n.raw).filter(Boolean).join('\n'));
 }
 
-/** 预览用的精简结构 */
 export function summarize(nodes) {
     return nodes.map((n) => ({
         id: n.id,
@@ -289,7 +255,6 @@ export function summarize(nodes) {
     }));
 }
 
-/** 从名称里粗判地区（算子、UI 都用同一套） */
 export const REGIONS = [
     { code: 'HK', flag: '🇭🇰', kw: ['香港', 'hongkong', 'hong kong', 'hk', 'hkg', '深港', '沪港', '京港', '🇭🇰'] },
     { code: 'TW', flag: '🇹🇼', kw: ['台湾', '台灣', 'taiwan', 'tw', 'twn', 'tpe', '🇹🇼', '新北', '彰化'] },
@@ -347,30 +312,16 @@ export const REGIONS = [
     { code: 'CN', flag: '🇨🇳', kw: ['中国', '中國', 'china', 'cn', 'chn', '回国', '國內', '国内', '🇨🇳'] },
 ];
 
-/**
- * 预编译每个地区的匹配器。
- *
- * ⚠️ 短拉丁码（≤3 个字母的国家码，如 fi / nl / in）**必须按「整词」匹配**，不能裸子串：
- * 节点名里全是普通英文单词，`FI.ulzix.Hetzner_Online` 里的 online 含 "nl"、
- * "Finland" 含 "fi"、节点数 "10in1" 含 "in" —— 裸子串会把它们全判成地区码，
- * 于是芬兰节点挂上荷兰国旗（真实案例）。
- * 「整词」的判定是两侧都不是字母（数字、`.`、`_`、`-`、中文、首尾都算边界），
- * 这样 `FI.`、`HK01`、`US_2` 都能命中，而 `online`、`Finland` 不会。
- */
 const MATCHERS = REGIONS.map((r) => ({
     code: r.code,
     flag: r.flag,
-    // 中文 / 旗帜 / 长英文词仍用子串匹配 —— 这些串在节点名里出现就是要表达地区
+    
     loose: r.kw.filter((k) => !/^[a-z]{1,3}$/.test(k)).map((k) => k.toLowerCase()),
     strict: r.kw
         .filter((k) => /^[a-z]{1,3}$/.test(k))
         .map((k) => ({ kw: k.toLowerCase(), re: new RegExp(`(^|[^a-z])${k}([^a-z]|$)`, 'i') })),
 }));
 
-/**
- * 判定节点地区码。
- * 关键词越长越优先：`hongkong` 比 `hk` 更具体，先比长的能压住大部分歧义。
- */
 export function regionOf(name) {
     const s = String(name || '').toLowerCase();
     if (!s) return '';

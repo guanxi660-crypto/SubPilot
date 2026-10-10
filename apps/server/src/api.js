@@ -445,14 +445,20 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 if (idx < 0) return { error: `文件不存在：${name}`, status: 404 };
                 const incoming = pick(body, FILE_FIELDS);
                 const newName = String(incoming.name ?? name).trim();
-                if (newName !== name) {
-                    const nerr = validateFile({ ...s.files[idx], name: newName, content: 'x' });
-                    if (nerr) return { error: nerr, status: 400 };
-                    if (s.files.some((f) => f.name === newName)) {
-                        return { error: `名称已被占用：${newName}`, status: 409 };
-                    }
+                if (newName !== name && s.files.some((f) => f.name === newName)) {
+                    return { error: `名称已被占用：${newName}`, status: 409 };
                 }
-                const merged = normalizeFile({ ...s.files[idx], ...incoming }, s.files[idx]);
+                const merged = normalizeFile(
+                    { ...s.files[idx], ...incoming, name: newName },
+                    s.files[idx],
+                );
+                // 校验**合并后的结果**，不能只在改名时校验。
+                // 之前这里只在 newName !== name 时调 validateFile，于是「不改名」的
+                // PATCH 完全跳过校验 —— 扩展名白名单、512KB 上限、以及审计 L2 的
+                // 远程地址协议限制，全都能用一个同名的 PATCH 绕过去（实测：
+                // PATCH {source:'remote', url:'javascript:alert(1)'} 会被原样存下）。
+                const verr = validateFile(merged);
+                if (verr) return { error: verr, status: 400 };
                 merged.createdAt = s.files[idx].createdAt;
                 merged.updatedAt = nowIso();
                 s.files[idx] = merged;
@@ -892,8 +898,12 @@ function validateFile(body) {
     }
     const size = fileBytes(body?.content);
     if (size > MAX_FILE_BYTES) return `文件超过 512KB 上限（当前约 ${Math.round(size / 1024)}KB）`;
-    if (body?.source === 'remote' && !String(body?.url || '').trim()) {
-        return '远程文件需要填写地址';
+    if (body?.source === 'remote') {
+        const u = String(body?.url || '').trim();
+        if (!u) return '远程文件需要填写地址';
+        // 只允许 http(s)：分享出口是 302 跳转（convert.js 的 /share/file），
+        // 放行其它协议等于把分享链接变成开放重定向 / 脚本载体（审计 L2）
+        if (!/^https?:\/\//i.test(u)) return '远程文件地址必须以 http:// 或 https:// 开头';
     }
     return '';
 }

@@ -106,7 +106,18 @@ if (link) {
     const dl = await fetch(link);
     const dt = await dl.text();
     ok('/download/adhoc 无令牌可访问', dl.status === 200, `HTTP ${dl.status}`);
-    ok('产出是完整 Clash 配置（含 proxy-providers）', /proxy-providers:/.test(dt));
+    // Sub-Store 模式（见 convert.js handleDownload / buildLinks 注释）：
+    // 分发链接一律输出**编辑后的订阅**，target 参数被忽略、不做客户端转换。
+    // 这里的来源是本地 vmess 订阅 → 产出 base64(URI 列表) 的通用订阅，
+    // 不再产出 Clash 配置。旧断言查 proxy-providers 是转换时代的遗留。
+    const decoded = Buffer.from(dt.trim(), 'base64').toString('utf8');
+    ok(
+        '产出是通用订阅（base64 URI 列表）',
+        /^(ss|vless|vmess|trojan|hysteria2|tuic):\/\//m.test(decoded),
+        decoded.slice(0, 40).replace(/\n/g, '⏎') + '…',
+    );
+    ok('不再做客户端转换（无 proxy-providers）', !/proxy-providers:/.test(dt));
+    ok('格式标记为 uri', dl.headers.get('x-subpilot-format') === 'uri', dl.headers.get('x-subpilot-format') || '(无)');
     ok('产出不含访问令牌', !dt.includes(TOKEN));
 }
 

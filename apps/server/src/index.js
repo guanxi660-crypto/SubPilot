@@ -29,23 +29,49 @@ const PROTECTED_PREFIXES = ['/api/', '/ai/'];
 
 export default {
     async fetch(request, env, ctx) {
+        return withSecurityHeaders(await handleRequest(request, env, ctx));
+    },
+};
+
+/**
+ * 全站安全响应头。
+ *
+ * 为什么必须有 nosniff：`/share/file/<名>?code=` 以 text/plain 返回**用户上传的
+ * 任意文本**，而允许的扩展名里有 html / htm / js。没有 nosniff 时，浏览器的
+ * MIME 嗅探可能把 text/plain 当 HTML 解析 —— 那就是同源下的存储型 XSS，
+ * 而同源意味着可以调用全部 /api/*（令牌在 localStorage）。
+ *
+ * CSP 暂不在这里加：前端用了大量内联 style（Tailwind 的 :style 绑定、CSS 变量），
+ * 收紧 style-src 会直接把布局打坏，需要单独评估（见 AUDIT.md M4）。
+ */
+const SECURITY_HEADERS = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+};
+
+function withSecurityHeaders(res) {
+    const headers = new Headers(res.headers);
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) {
+        if (!headers.has(k)) headers.set(k, v);
+    }
+    // 204 / 304 不允许带 body，重建时必须显式置空
+    const body = res.status === 204 || res.status === 304 ? null : res.body;
+    return new Response(body, { status: res.status, statusText: res.statusText, headers });
+}
+
+async function handleRequest(request, env, ctx) {
+    {
         const url = new URL(request.url);
         const path = url.pathname;
         const query = url.searchParams;
         const method = request.method.toUpperCase();
 
-        // CORS 预检：前端可能从别的域调（比如本地 vite dev）
-        if (method === 'OPTIONS') {
-            return new Response(null, {
-                status: 204,
-                headers: {
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,HEAD,OPTIONS',
-                    'Access-Control-Allow-Headers': 'Authorization,Content-Type',
-                    'Access-Control-Max-Age': '86400',
-                },
-            });
-        }
+        // 这里原本有一段 OPTIONS 预检特判，返回 Access-Control-Allow-Origin: * ——
+        // 但真实响应由 util.js 的 json()/text() 构造、**不带任何 CORS 头**，
+        // 所以预检通过也会被浏览器拦下，属于自相矛盾的死代码（审计 L4）。
+        // 生产是同域部署（前端由同一个 Worker 的 assets 提供），dev 走 vite 代理，
+        // 都不需要 CORS。真要开放跨域，必须同时给实际响应补头，不能只留预检。
 
         if (path === '/healthz') return handleHealthz();
 
@@ -139,8 +165,8 @@ export default {
         } catch (e) {
             return fail(`服务器内部错误：${e?.message || e}`, 500);
         }
-    },
-};
+    }
+}
 
 function isProtected(path, method) {
     // 这些路由自带鉴权通道（分发密钥 / 分享码），不在这里拦

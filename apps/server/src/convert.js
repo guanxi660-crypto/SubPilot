@@ -642,6 +642,11 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
             );
         }
         if (f.source === 'remote' && f.url) {
+            // 只允许 http(s)：远程文件地址是配置项，若放行 javascript:/data: 之类协议，
+            // 分享链接就变成开放重定向 / 脚本载体（审计 L2）。
+            if (!/^https?:\/\//i.test(f.url)) {
+                return fail('远程文件地址不是 http(s)，拒绝跳转', 502);
+            }
             return Response.redirect(f.url, 302);
         }
         return text(f.content || '', 200, 'text/plain;charset=UTF-8', {
@@ -693,12 +698,19 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
 /**
  * 生成分发链接。给前端「复制订阅」用。
  *
- * 返回两条：
+ * 返回：
  *   link     —— 带派生分发密钥（?ft=），可安全发给别人 / 粘进客户端。
  *               **永远是编辑后的订阅（Sub-Store 模式）**：URI 来源 → base64
  *               URI 通用订阅，clash 来源 → 本地 clash YAML；target 参数
  *               已不再写入链接（/download 分发通道会忽略它）。
- *   adminLink —— 带管理令牌，只在本机排障时用，不要外发
+ *   feedUrl  —— 给 SCE 回拉的 feed 地址（同一套派生密钥）
+ *   feedKey  —— 派生密钥本身（换密钥 / 排障用）
+ *
+ * ⚠️ 不再返回 `adminLink`。此前这里会拼一条嵌着**明文 SUBPILOT_TOKEN** 的 URL
+ * 一起下发，等于把全量管理凭据塞进每一次 /api/link 的响应体（浏览器内存、
+ * DevTools、反代日志、剪贴板、聊天记录都算泄露面），而前端根本没渲染它 ——
+ * 属于纯风险无收益（审计 M1）。需要带令牌的排障链接时，在已登录的浏览器里
+ * 从地址栏手工拼：`<base>/download/<名>?token=<令牌>`。
  *
  * 两种寻址方式：
  *   · 具名（sub / col）—— 名字直接进路径；
@@ -719,13 +731,8 @@ export async function buildLinks(request, env, snap, { kind, name, target = '', 
         // target 不写入分发链接：/download 分发通道一律输出编辑后的订阅
         dl.set('ft', ft);
 
-        const admin = new URLSearchParams(dl);
-        admin.delete('ft');
-        admin.set('token', String(env.SUBPILOT_TOKEN || ''));
-
         return {
             link: `${base}/download/adhoc?${dl.toString()}`,
-            adminLink: `${base}/download/adhoc?${admin.toString()}`,
             feedUrl: `${base}/feed/adhoc?spec=${spec}&ft=${ft}`,
             feedKey: ft,
         };
@@ -742,10 +749,6 @@ export async function buildLinks(request, env, snap, { kind, name, target = '', 
     // 一律输出编辑后的订阅，见本函数头注释与 handleDownload 注释
     qs.set('ft', ft);
 
-    const admin = new URLSearchParams(qs);
-    admin.delete('ft');
-    admin.set('token', String(env.SUBPILOT_TOKEN || ''));
-
     const feedPath =
         kind === 'col'
             ? `/feed/col/${encodeURIComponent(name)}?ft=${ft}`
@@ -753,7 +756,6 @@ export async function buildLinks(request, env, snap, { kind, name, target = '', 
 
     return {
         link: `${base}${path}?${qs.toString()}`,
-        adminLink: `${base}${path}?${admin.toString()}`,
         feedUrl: `${base}${feedPath}`,
         feedKey: ft,
     };

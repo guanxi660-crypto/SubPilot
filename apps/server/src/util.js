@@ -98,25 +98,24 @@ export function nowIso() {
 /**
  * 常量时间字符串比较。
  * 用途：令牌校验。避免 `===` 的短路比较在理论上泄漏前缀长度信息。
+ *
+ * ⚠️ 必须比**原文**，绝不能比原文的短哈希。此前的实现是「各自算 32 位 FNV-1a
+ * 再逐字符比」，判定条件变成「长度相同 **且** 32 位哈希相同」—— 32 位摘要空间
+ * 可离线枚举（生日碰撞约 2^16 次尝试），等长碰撞串会被判为合法令牌，构成实质
+ * 鉴权绕过（审计 S1）。
+ *
+ * 现在按较长的长度固定轮数循环，越界侧取 0，长度差也并进 diff：
+ * 无论输入多长，循环次数只与长度有关，比较耗时与「第几位开始不同」无关。
  */
 export function safeEqual(a, b) {
     const x = String(a ?? '');
     const y = String(b ?? '');
-    // 长度也要抹平：先各自哈希到固定长度再逐字节比
-    const hx = fnv1a(x);
-    const hy = fnv1a(y);
+    const n = Math.max(x.length, y.length);
     let diff = x.length ^ y.length;
-    for (let i = 0; i < hx.length; i++) diff |= hx.charCodeAt(i) ^ hy.charCodeAt(i);
-    return diff === 0 && x.length === y.length;
-}
-
-function fnv1a(s) {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < s.length; i++) {
-        h ^= s.charCodeAt(i);
-        h = Math.imul(h, 0x01000193) >>> 0;
+    for (let i = 0; i < n; i++) {
+        diff |= (x.charCodeAt(i) || 0) ^ (y.charCodeAt(i) || 0);
     }
-    return h.toString(16).padStart(8, '0');
+    return diff === 0;
 }
 
 /**

@@ -146,17 +146,28 @@ export function createSqliteStore(file) {
                 }
             }
             const list = [];
+            const listed = new Set();
             for (const id of ids) {
                 const data = byId.get(id);
                 if (data === undefined) continue; // 顺序表里的悬空 id，跳过
                 list.push(JSON.parse(data));
-                byId.delete(id);
+                listed.add(id);
             }
             // 兜底：库里有、顺序表里没有的行也要读出来，否则数据会「凭空消失」
-            for (const data of byId.values()) list.push(JSON.parse(data));
+            for (const [id, data] of byId) {
+                if (listed.has(id)) continue;
+                list.push(JSON.parse(data));
+            }
 
             orderCache[key] = list.map((row) => String(row[idField] ?? ''));
             snapshotCache[key] = list;
+            // rowCache 必须保留**完整行集**，且值用库里的原始 JSON 串 ——
+            // 之前写成 `rowCache[key] = byId` 之后又在上面用 `byId.delete(id)`
+            // 逐条掏空，重启后首次 writeSnapshot 里 planTable 对每一行都判定
+            // `prevRows.get(id) !== json` → 整表重写一次，行级增量的意义全失
+            // （审计 M6）。用原始串而非 JSON.stringify(JSON.parse(...))，保证与
+            // planTable 生成的 nextRows 逐字符可比，不会误判为「全变了」。
+            rowCache[key] = byId;
         }
 
         const meta = stmt('SELECT app, version, updated_at, settings FROM meta WHERE id = 1').get();

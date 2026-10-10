@@ -13,8 +13,36 @@
 import { mkdtempSync, rmSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { createSqliteStore } from '../apps/server/node/sqlite-store.mjs';
+
+// ── 计数钩子：包装原生 prepare，统计各表**实际执行的 upsert 语句数** ──────
+//
+// 为什么不用 WAL 体积量「写了几行」：实测（见 .tmp-formats 的对照实验）发现
+// SQLite 会跳过「内容与磁盘完全相同」的页写入 —— 把同一行原样写回，WAL 帧数
+// 是 0。于是「缺陷版多写的那些行」在 WAL 上一帧都不体现，用 WAL 做断言会恒真。
+// 这里改成直接数 INSERT ... ON CONFLICT 的执行次数，才是缺陷真正改变的量：
+// 缺陷版重启后改 1 条会 upsert 5 次，修复版只 upsert 1 次。
+const upsertCount = new Map();
+{
+    const origPrepare = DatabaseSync.prototype.prepare;
+    DatabaseSync.prototype.prepare = function (sql) {
+        const st = origPrepare.call(this, sql);
+        const m = /INSERT INTO (\w+)\b/.exec(sql);
+        if (m) {
+            const table = m[1];
+            const origRun = st.run;
+            st.run = function (...args) {
+                upsertCount.set(table, (upsertCount.get(table) || 0) + 1);
+                return origRun.apply(this, args);
+            };
+        }
+        return st;
+    };
+}
+const resetCounts = () => upsertCount.clear();
+const countOf = (table) => upsertCount.get(table) || 0;
 
 let pass = 0;
 let fail = 0;
@@ -177,6 +205,34 @@ try {
     ok('重开后分享码还在', after.shares.map((x) => x.code).join(',') === 'c1,c3', after.shares.map((x) => x.code).join(','));
     ok('重开后设置还在', after.settings.defaultTarget === 'clash');
     ok('重开后统计还在', Object.keys((await reopened.readStats()).items).length === 200);
+
+    // [8] 审计 M6 回归：**重启后的第一次写入**必须是行级增量。
+    // 曾经的实现是 hydrate 里 `rowCache[key] = byId` 之后又用 `byId.delete(id)`
+    // 逐条掏空同一个 Map 引用，于是重开后 prevRows 是空的 —— planTable 判定
+    // 每一行都「变了」，首写把整表（含 5×200KB 正文）全量重写一遍。
+    // reopened 是 [7] 重启出来的 store，这里量「只改 1 条」实际 upsert 了几行。
+    console.log('\n[8] 重启后首写仍是行级增量（审计 M6 回归）');
+
+    let after8 = await reopened.readSnapshot();
+    after8.subs[1] = { ...after8.subs[1], note: '只改这一条' };
+    resetCounts();
+    await reopened.writeSnapshot(after8);
+    const upsertOneRow = countOf('subs');
+
+    after8 = await reopened.readSnapshot();
+    after8.subs = after8.subs.map((x, i) => ({ ...x, note: `全改${i}` }));
+    resetCounts();
+    await reopened.writeSnapshot(after8);
+    const upsertAllRows = countOf('subs');
+
+    ok('重启后只改 1 条 → 只 upsert 1 行', upsertOneRow === 1, `实际 ${upsertOneRow} 行`);
+    ok('改 5 条 → upsert 5 行（对照）', upsertAllRows === 5, `实际 ${upsertAllRows} 行`);
+    ok(
+        '重启后首写量级是「1 行」而非「5 行」',
+        upsertOneRow * 2 < upsertAllRows,
+        `1 条=${upsertOneRow} 行 · 5 条=${upsertAllRows} 行`,
+    );
+
     reopened.close();
 } finally {
     try {

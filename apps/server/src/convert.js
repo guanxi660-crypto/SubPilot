@@ -510,7 +510,7 @@ export async function handleConvertLink(request, env, ctx, { query }) {
 }
 
 /**
- * 成品的「成品链接」—— 转换后端格式的**快照链**（用户 2026-10-11 指定）。
+ * 成品的「成品链接」—— 转换后端格式的**快照链**（用户 2026-10-10 指定）。
  *
  * 形如 `<转换后端>/sub?target=<成品格式>&url=<成品自身的快照地址>&config=<模板>`。
  *
@@ -520,7 +520,7 @@ export async function handleConvertLink(request, env, ctx, { query }) {
  * 所以内容仍然固定在保存那一刻，不会跟着原始订阅漂移。
  * 换句话说「成品 = 快照」的语义没变，只是把交付通道换成了后端。
  *
- * 实测（默认后端，2026-10-11）：把一份 clash 快照当输入交给 SCE，
+ * 实测（默认后端，2026-10-10）：把一份 clash 快照当输入交给 SCE，
  * target=singbox / shadowrocket 会把节点内联出来；target=clash 输出
  * provider 形态 —— 这与普通 URI 列表输入的表现完全一致，不是快照特有的问题。
  *

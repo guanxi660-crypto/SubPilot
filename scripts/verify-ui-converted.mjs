@@ -142,7 +142,7 @@ if (await card.count()) {
     ok('卡片仍有「删除」', flat.includes('删除'));
 
     // 点「分享链接」真的把**成品链接**（转换后端格式的快照链）放进剪贴板 ——
-    // 2026-10-11 起卡片复制的就是这条，与推给 TG 的那条由后端同一函数产出。
+    // 2026-10-10 起卡片复制的就是这条，与推给 TG 的那条由后端同一函数产出。
     await card.locator('button', { hasText: '分享链接' }).first().click();
     await page.waitForTimeout(400);
     const clip = await page.evaluate(() => navigator.clipboard.readText());

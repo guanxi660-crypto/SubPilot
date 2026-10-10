@@ -64,7 +64,7 @@ const created = (made.json?.data || []).find((x) => x.name === NAME);
 ok('保存后立即带 shareCode', !!created?.shareCode, created?.shareCode || '(空)');
 ok('列表项带 size 且不泄漏 content', typeof created?.size === 'number' && !('content' in (created || {})), `size=${created?.size}`);
 
-// ---- 成品链接（2026-10-11 新增）：卡片复制 / TG 推送用的都是它 ----
+// ---- 成品链接（2026-10-10 新增）：卡片复制 / TG 推送用的都是它 ----
 // 形状 = <转换后端>/sub?target=<成品格式>&url=<成品自身的快照>&config=<模板>
 const parseLink = (s) => {
     try {

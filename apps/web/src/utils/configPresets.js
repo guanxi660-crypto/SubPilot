@@ -172,3 +172,43 @@ export const CONFIG_PRESET_GROUPS = [
 export const PRESET_NAME_BY_URL = Object.fromEntries(
     CONFIG_PRESET_GROUPS.flatMap((g) => g.options).map((o) => [o.url, o.name]),
 );
+
+// ---------------------------------------------------------------- 上次用过的配置
+
+/**
+ * 「上一次用过的外部配置」。
+ *
+ * 背景：以前每次进转换页，「外部配置 / 模板」都回到内置默认（Custom_Clash 默认版）。
+ * 用户上次挑的自定义地址只活在「记住这个地址」的那个列表里 —— 回来还得再点一次，
+ * 实际体验就是「明明存过，下次还是默认」，白存。
+ *
+ * 语义：
+ *   · 记的是**用户选过 / 填过的那个地址**（自定义地址与预设都算），
+ *     下次进转换页直接拿它当「外部配置 / 模板」的初值；
+ *   · 空值（= 不套模板）**不写入** —— 那是针对某一次转换的临时选择，
+ *     让它变成常驻默认会导致下次进来莫名其妙地不带模板；
+ *   · 与「记住这个地址」的列表（sp_conv_config_list）互不影响：那个是备选清单，
+ *     这个是当前默认值。原有功能一个都没动。
+ *   · 写不进去（隐私模式 / 禁用存储）静默忽略，退回内置默认，不影响使用。
+ */
+export const CONFIG_LAST_KEY = 'sp_conv_config_last';
+
+/** 读上次用过的配置地址；没有 / 读不到时返回空串（调用方回落到 DEFAULT_CONFIG_URL） */
+export function readLastConfig() {
+    try {
+        return String(localStorage.getItem(CONFIG_LAST_KEY) || '').trim();
+    } catch {
+        return '';
+    }
+}
+
+/** 记下这次用的配置地址。空值忽略（见上：不套模板不该成为常驻默认）。 */
+export function writeLastConfig(v) {
+    const t = String(v || '').trim();
+    if (!t) return;
+    try {
+        localStorage.setItem(CONFIG_LAST_KEY, t);
+    } catch {
+        /* 隐私模式写不进去也不影响使用 */
+    }
+}

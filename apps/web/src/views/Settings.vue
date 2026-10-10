@@ -135,10 +135,21 @@
                     <div
                         v-if="!keyEditing"
                         data-key-toggle
-                        class="input mt-1.5 font-mono !text-xs flex items-center justify-between cursor-pointer select-none text-slate-500"
+                        data-key-dots
+                        class="input mt-1.5 font-mono !text-xs flex items-center justify-between cursor-pointer select-none"
                         @click="keyEditing = true"
                     >
-                        <span>{{ settings.ai?.hasApiKey ? `已保存（${settings.ai.apiKeyMask}）` : '未设置' }}</span>
+                        <!-- 已保存就显示圆点串，与「同步」页的三个密钥框同一套视觉。
+                             此前这里回显掩码正文（sk-1****cdef）：既把密钥的首尾各 4 位
+                             摆在页面上，又和「同步」页的圆点不一致 —— 用户要确认的是
+                             「存过没有」，不是「存的是什么」。掩码挪到 title 里，
+                             鼠标悬停仍可核对是哪一把。 -->
+                        <span
+                            v-if="settings.ai?.hasApiKey"
+                            class="text-slate-400 tracking-[0.2em]"
+                            :title="settings.ai.apiKeyMask"
+                        >••••••••</span>
+                        <span v-else class="text-slate-500">未设置</span>
                         <span class="text-[11px] text-slate-600 shrink-0 ml-2">点击修改</span>
                     </div>
                     <input
@@ -292,6 +303,9 @@ async function save() {
         });
         settings.value = res.data || {};
         cfg.ai.apiKey = '';
+        // 保存成功后收回输入框：否则框里空着、旁边也没有圆点，看起来就像
+        // 「刚才那次没存上」。收回去立刻变回圆点串，保存生效与否一眼可见。
+        keyEditing.value = false;
         message.success('已保存');
         await loadEnv(true);
     } catch (e) {

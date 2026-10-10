@@ -173,6 +173,27 @@ function findTarget(snap, kind, name) {
 /** 走分享码通道的类型（没有 HMAC 派生密钥，只能靠一次性分享码分发） */
 const SHARE_KINDS = new Set(['file', 'converted']);
 
+/**
+ * 给推送链接打上「来源 = Telegram」的内部标记。
+ *
+ * 为什么需要它：TG 收到带链接的消息后会**自己去抓一次**这条地址做预览
+ * （下面的 sendMessage 传了 disable_web_page_preview: false），那一跳会打进
+ * /download 或 /share —— 于是「分发统计」里凭空多出一条 TG 的拉取记录，
+ * 看起来像是有人真拉过这个订阅。用户要的是「推送出去」这个动作本身不产生分发记录。
+ *
+ * 为什么用标记而不是认 UA / 出口 IP：UA 谁都能伪造，TG 的出口网段也会变，
+ * 认它们就是猜；而标记是我们自己写进链接里的，判据是确定的（见 convert.js 里
+ * handleDownload / handleShare 读 src 的那两处）。
+ *
+ * 代价：用户如果把 TG 里那条链接原样粘进客户端，那部分拉取也不计入统计 ——
+ * 这正是「TG 推出去的那一份」的语义，符合预期。
+ */
+export function tgMarked(url) {
+    if (!url) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}src=tg`;
+}
+
 // ---------------------------------------------------------------- 链接生成
 
 /**
@@ -210,7 +231,7 @@ async function targetLink(env, snap, { kind, name, linkType, base }) {
             });
         }
         return {
-            url: `${base}/share/${kind}/${encodeURIComponent(name)}?code=${code}`,
+            url: tgMarked(`${base}/share/${kind}/${encodeURIComponent(name)}?code=${code}`),
             created,
         };
     }
@@ -218,7 +239,7 @@ async function targetLink(env, snap, { kind, name, linkType, base }) {
     // buildLinks 只从 request 里取 base（settings.publicBaseUrl 优先，否则 request.url），
     // 这里已经算好 base 了，用一个最小 shim 传进去即可，不必复制一份 base 推导逻辑。
     const links = await buildLinks({ url: `${base}/` }, env, snap, { kind, name, target: linkType });
-    return { url: links.link, created: false };
+    return { url: tgMarked(links.link), created: false };
 }
 
 // ---------------------------------------------------------------- 消息渲染

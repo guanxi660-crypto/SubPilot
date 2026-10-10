@@ -630,6 +630,9 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
     q.delete('ft');
     q.delete('code');
     q.delete('spec');
+    // src 是我们自己加的来源标记（目前只有 TG 推送会带 src=tg），
+    // 对下游参数解析没有任何意义 —— 删掉，别让它混进 SCE 参数里。
+    q.delete('src');
 
     let pullName = name;
     if (isAdhoc) {
@@ -669,8 +672,11 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
 
     const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth });
 
-    // 统计只记成功分发（失败也记的话会污染「拉取次数」这个指标）
-    if (res.ok && ctx?.waitUntil) {
+    // 统计只记成功分发（失败也记的话会污染「拉取次数」这个指标）。
+    // src=tg 的请求跳过：那是 Telegram 给消息里的链接抓预览时打进来的
+    //（链接由 telegram.js 的 tgMarked 打标），不是真的有人在拉订阅 ——
+    // 记进去会让「分发统计」凭空多出 TG 的条目。详见 telegram.js 的 tgMarked。
+    if (res.ok && ctx?.waitUntil && !isTgCrawler(query)) {
         ctx.waitUntil(
             recordPull(env, {
                 type: isAdhoc ? '分发多来源' : isCollection ? '组合' : '订阅',
@@ -680,6 +686,17 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
         );
     }
     return res;
+}
+
+/**
+ * 这次请求是不是 Telegram 抓链接预览打进来的。
+ *
+ * 判据只有一条：链接里带我们自己的 `src=tg` 标记（telegram.js 的 tgMarked）。
+ * **刻意不认 UA / 出口 IP** —— UA 谁都能伪造、TG 的网段也会变，认它们就是猜；
+ * 标记是确定性的，且只影响统计口径，没有任何鉴权含义。
+ */
+function isTgCrawler(query) {
+    return query.get('src') === 'tg';
 }
 
 // ---------------------------------------------------------------- /share
@@ -722,7 +739,7 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     if (kind === 'file') {
         const f = snap.files.find((x) => x.name === name);
         if (!f) return fail('分享链接无效或已过期', 403);
-        if (ctx?.waitUntil) {
+        if (ctx?.waitUntil && !isTgCrawler(query)) {
             ctx.waitUntil(
                 recordPull(env, { type: '分享文件', item: name, ip: clientIp(request) }).catch(() => {}),
             );
@@ -746,7 +763,7 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     if (kind === 'converted') {
         const c = snap.converted.find((x) => x.name === name);
         if (!c) return fail('分享链接无效或已过期', 403);
-        if (ctx?.waitUntil) {
+        if (ctx?.waitUntil && !isTgCrawler(query)) {
             ctx.waitUntil(
                 recordPull(env, { type: '分享成品', item: name, ip: clientIp(request) }).catch(() => {}),
             );
@@ -759,6 +776,8 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     // sub / col
     const q = new URLSearchParams(query);
     q.delete('code');
+    // src 只是来源标记（TG 推送会带 src=tg），对下游参数解析没有意义，删掉
+    q.delete('src');
     if (kind === 'sub') q.set('sub', name);
     else q.set('collection', name);
 
@@ -767,7 +786,7 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     q.set('target', 'raw');
 
     const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth: '' });
-    if (res.ok && ctx?.waitUntil) {
+    if (res.ok && ctx?.waitUntil && !isTgCrawler(query)) {
         ctx.waitUntil(
             recordPull(env, {
                 type: kind === 'sub' ? '分享订阅' : '分享组合',

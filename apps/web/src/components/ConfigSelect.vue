@@ -54,7 +54,12 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue';
-import { CONFIG_PRESET_GROUPS, DEFAULT_CONFIG_URL, PRESET_NAME_BY_URL } from '../utils/configPresets.js';
+import {
+    CONFIG_PRESET_GROUPS,
+    DEFAULT_CONFIG_URL,
+    PRESET_NAME_BY_URL,
+    writeLastConfig,
+} from '../utils/configPresets.js';
 
 const props = defineProps({
     modelValue: { type: String, default: '' },
@@ -101,6 +106,9 @@ watch(
     (v) => {
         const t = (v || '').trim();
         if (t === '' || t === DEFAULT_CONFIG_URL || PRESET_NAME_BY_URL[t]) customMode.value = false;
+        // 顺手记下这次用的地址：下次进转换页直接拿它当初值，不用再挑一遍。
+        // 空值（不套模板）不写入 —— 见 configPresets.js 里那段说明。
+        writeLastConfig(t);
     },
 );
 

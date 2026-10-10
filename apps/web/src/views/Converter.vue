@@ -353,7 +353,7 @@ import { useMessage } from 'naive-ui';
 import { api } from '../stores/auth.js';
 import { loadOperatorMeta, sceTargets } from '../stores/operators.js';
 import { validateName } from '../utils/name.js';
-import { DEFAULT_CONFIG_URL } from '../utils/configPresets.js';
+import { DEFAULT_CONFIG_URL, readLastConfig } from '../utils/configPresets.js';
 import ConfigSelect from '../components/ConfigSelect.vue';
 import TgPushButton from '../components/TgPushButton.vue';
 import { shareUrl } from '../utils/share.js';
@@ -370,7 +370,9 @@ const running = ref(false);
 const form = reactive({
     url: '',
     target: 'clash',
-    config: DEFAULT_CONFIG_URL,
+    // 「外部配置 / 模板」的初值 = 上次用过的那个地址（自定义或预设），
+    // 没记过才回落到内置默认。见 configPresets.js 的 readLastConfig。
+    config: readLastConfig() || DEFAULT_CONFIG_URL,
     // 开关一律默认关闭。buildParams 里 emoji 会显式传最终值，
     // 所以「不勾选」= 后端收到 emoji=false = 真的不加旗，语义是确定的。
     emoji: false,
@@ -876,9 +878,10 @@ function applyQuery({ resetConfig = false } = {}) {
     ];
     if (q.target) form.target = q.target;
     else if (resetConfig) form.target = srv.defaultTarget || 'clash';
-    // 外部配置不再有「默认值」一说了：统一落到内置默认（SubPilot-Archive 同款底稿），
-    // 要换就在输入源区的「外部配置 / 模板」里选或填自定义地址
-    if (resetConfig) form.config = DEFAULT_CONFIG_URL;
+    // 外部配置的初值 = **上次用过的那个地址**（自定义或预设），没记过才用内置默认。
+    // 此前一律重置成内置默认，于是「记住这个地址」存下的自定义地址每次回来都被顶掉，
+    // 用户得手动再挑一次 —— 存了等于没存。改地址照旧在「外部配置 / 模板」里选或填。
+    if (resetConfig) form.config = readLastConfig() || DEFAULT_CONFIG_URL;
 }
 
 onMounted(async () => {

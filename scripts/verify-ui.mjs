@@ -204,6 +204,60 @@ if (savedOk) {
     check('删除成品后列表同步更新', delOk, `${beforeCards + 1} → 恢复`);
 }
 
+// ---- 2d. 外部配置 / 模板：默认值 = 上次用过的那个地址 ----
+// 以前每次进转换页都回到内置默认，用户上次挑的自定义地址只活在「记住这个地址」
+// 的清单里 —— 回来还得再点一次，存了等于没存。现在「用户选过/填过的地址」会记下来
+// 当初值；空值（不套模板）不写，那是针对某一次转换的临时选择。
+await page.goto(`${BASE}/#/converter`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(1000);
+
+const cfgSelect = page.locator('select').filter({ hasText: '自定义地址…' });
+check('转换页「外部配置 / 模板」下拉存在', (await cfgSelect.count()) === 1, `${await cfgSelect.count()} 个`);
+
+const CUSTOM_URL = 'https://example.com/verify-last-config.ini';
+const PRESET_URL = 'https://raw.githubusercontent.com/Aethersailor/Custom_OpenClash_Rules/main/cfg/Custom_Clash_Lite.ini';
+const storedLast = () => page.evaluate(() => localStorage.getItem('sp_conv_config_last'));
+
+// 选预设 → 记下来
+await cfgSelect.selectOption(PRESET_URL);
+await page.waitForTimeout(400);
+check('选预设后写入「上次配置」', (await storedLast()) === PRESET_URL, String(await storedLast()));
+
+// 不套模板（空值）→ 不覆盖，否则下次进来会莫名其妙地不带模板
+await cfgSelect.selectOption('__none');
+await page.waitForTimeout(400);
+check('选「不套模板」不覆盖已记录的默认', (await storedLast()) === PRESET_URL, String(await storedLast()));
+
+// 填自定义地址 → 记下来，并且重载后就是初值
+await cfgSelect.selectOption('__custom');
+await page.waitForTimeout(300);
+const cfgInput = page.locator('input[placeholder="https://.../Custom_Clash.ini"]');
+check('切「自定义地址…」后出现输入框', (await cfgInput.count()) === 1);
+await cfgInput.fill(CUSTOM_URL);
+await page.waitForTimeout(400);
+check('填自定义地址后写入「上次配置」', (await storedLast()) === CUSTOM_URL, String(await storedLast()));
+
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1200);
+check(
+    '重载后「外部配置 / 模板」初值 = 上次保存的地址',
+    (await cfgInput.inputValue()) === CUSTOM_URL,
+    await cfgInput.inputValue(),
+);
+
+// 清掉记录 → 回到内置默认（原有行为不变）
+await page.evaluate(() => localStorage.removeItem('sp_conv_config_last'));
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1200);
+const cfgSelNow = await page.evaluate(() => {
+    const s = [...document.querySelectorAll('select')].find((x) =>
+        [...x.options].some((o) => o.value === '__custom'),
+    );
+    return s ? s.value : null;
+});
+check('清掉记录后回到内置默认（Custom_Clash 默认版）', cfgSelNow === '__default', String(cfgSelNow));
+check('「记住这个地址」的清单仍在（原有功能保留）', (await cfgSelect.count()) === 1);
+
 // ---- 3. 文件页：生成链接 → 卡片下方就地出现链接；再点「分享链接」可收起 ----
 await page.goto(`${BASE}/#/files`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(900);
@@ -407,6 +461,50 @@ check(
 );
 const nakedSettings = await naked('input[type="password"]');
 check('设置页没有未声明的密码框', nakedSettings === 0, `裸密码框=${nakedSettings}`);
+
+// ---- 9c. 已保存的 API Key 收起态显示小黑点 ----
+// 后端只回掩码不回明文；收起态此前直接回显掩码正文（sk-1****cdef）—— 既把密钥
+// 首尾摆在页面上，又和「同步」页三个密钥框的圆点视觉不一致。现在统一成圆点串，
+// 掩码挪进 title 供悬停核对。这里给 /api/settings 打桩（不真存 Key、不动数据）。
+await page.route('**/api/settings', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const resp = await route.fetch();
+    const body = await resp.json();
+    body.data = {
+        ...(body.data || {}),
+        ai: { ...(body.data?.ai || {}), hasApiKey: true, apiKeyMask: 'sk-1****cdef' },
+    };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+});
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1300);
+
+const keyBox = aiCard.locator('[data-key-dots]');
+check('已保存时仍是「点击修改」那种只读框', (await keyBox.count()) === 1);
+const keyTxt = ((await keyBox.textContent()) || '').trim();
+check(
+    '已保存时显示圆点串，而不是掩码正文',
+    keyTxt.includes('••••••••') && !/sk-1|\*\*\*\*/.test(keyTxt),
+    JSON.stringify(keyTxt),
+);
+check(
+    '掩码挪到悬停提示里（仍可核对是哪一把）',
+    (await keyBox.locator('span').first().getAttribute('title')) === 'sk-1****cdef',
+);
+// 未保存时不能显示圆点，否则「存没存过」就分不出来了
+await page.unroute('**/api/settings');
+await page.route('**/api/settings', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const resp = await route.fetch();
+    const body = await resp.json();
+    body.data = { ...(body.data || {}), ai: { ...(body.data?.ai || {}), hasApiKey: false, apiKeyMask: '' } };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+});
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1300);
+const keyTxt2 = ((await keyBox.textContent()) || '').trim();
+check('未保存时显示「未设置」而不是圆点', keyTxt2.includes('未设置') && !keyTxt2.includes('•'), JSON.stringify(keyTxt2));
+await page.unroute('**/api/settings');
 
 // ---- 10. TG 推送目标：胶囊多选（对齐转换页「输入源」） ----
 await page.goto(`${BASE}/#/sync`, { waitUntil: 'networkidle' });

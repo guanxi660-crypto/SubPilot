@@ -24,14 +24,14 @@ SubPilot 服务端 ────────────────────�
         /download/*、/share/*   客户端直接拉取（只读分发密钥）
 ```
 
-**本项目默认后端**：https://subpilot.57995799.xyz/version
+[本项目默认后端版本](https://subpilot.57995799.xyz/version)
 
-基于 **SubConverter-Extended**：https://github.com/Aethersailor/SubConverter-Extended
+基于 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended)
 
 该实例由作者自建、**公益免费提供**，`SUB_BACKEND` 已预置此地址，开箱即用；
 不承诺可用性与稳定性，请勿滥用，有稳定性要求请换自建后端。
 
-**出处引用**：算子链 DSL 与 Sub-Store（https://github.com/sub-store-org/Sub-Store）保持兼容；
+**出处引用**：算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；
 完整第三方声明见 `NOTICE` 与文末「许可」。
 
 <p align="center">
@@ -42,17 +42,6 @@ SubPilot 服务端 ────────────────────�
   <img src="shots/06-转换.png" width="49%" alt="转换" />
   <img src="shots/08-AI助手.png" width="49%" alt="AI 助手" />
 </p>
-
-## 分发链接语义（重要）
-
-分享 / 分发链接**只输出编辑后的订阅，不做任何格式转换**（Sub-Store 模式）：
-
-- URI 来源 → v2ray base64 通用订阅，各客户端直接导入，也可再当转换输入；
-- clash 来源 → 本地序列化的 clash YAML；
-- `?target=` 参数在分发通道**被忽略**（老链接兼容）。
-
-这样分享出去的链接不会被下游二次转换。需要特定客户端格式时，去**转换页**
-（`/sub?target=xxx`）或保存成品（`/api/converted`）—— 只有这两条路会做格式转换。
 
 ## 部署
 
@@ -170,26 +159,13 @@ docker compose down
 | 表单项 | 怎么填 |
 | --- | --- |
 | 项目名称 | 默认 `subpilot`，可改 |
-| `SUBPILOT_TOKEN` | **唯一要填的**。填一个随机串（建议 `openssl rand -hex 24`），这就是登录令牌 |
+| `SUBPILOT_TOKEN` | **唯一要填的**。填一个随机串（建议 `openssl rand -hex 24`）或 UUID，这就是登录令牌 |
 | `SUB_BACKEND` / `TZ` / `DB_FILE` | 已预填默认值，**不用动** |
 | 启用预构建 | 保持开启（部署时自动构建前端） |
 
 点「部署」即可，KV 等资源由部署流程按 `wrangler.jsonc` 的声明自动创建并绑定。
 完成后打开分配的 `*.workers.dev` 地址（或你绑定的自定义域），输入刚才填的
 `SUBPILOT_TOKEN` 登录。
-
-之后想用本地 wrangler 管理同一个 Worker：
-
-```bash
-cd apps/server
-npx wrangler deploy -c wrangler.jsonc
-npx wrangler secret put SUBPILOT_TOKEN -c wrangler.jsonc
-```
-
-| 命令 | 作用 |
-| --- | --- |
-| `wrangler deploy` | 改完后端代码或重新构建前端后重新部署 |
-| `wrangler secret put SUBPILOT_TOKEN` | 换访问令牌（改完所有已登录设备需重新输入） |
 
 两点容易踩：
 

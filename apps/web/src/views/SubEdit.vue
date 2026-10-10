@@ -44,10 +44,17 @@
                  列表超出时自己滚（不再把卡片撑高）。 -->
             <div
                 class="grid lg:grid-cols-3 lg:grid-rows-[minmax(0,1fr)] gap-4 mt-6 items-stretch grow basis-0 min-h-[680px]"
+                :class="jsonFlexNone ? 'mb-16' : ''"
                 :style="gridMinH != null ? { minHeight: `${gridMinH}px` } : undefined"
             >
-                <!-- 预览 -->
-                <div ref="previewCardEl" class="card p-6 fade-up lg:col-span-1 flex flex-col min-h-0 relative">
+                <!-- 预览：默认 stretch 到底边对齐；JSON 拉伸时 self-start，
+                     自身保持内容自然高（不被右列拉高），顶对齐网格顶，
+                     放弃底边对齐限制（页面随 JSON 向下拉伸） -->
+                <div
+                    ref="previewCardEl"
+                    class="card p-6 fade-up lg:col-span-1 flex flex-col min-h-0 relative"
+                    :class="jsonFlexNone ? 'lg:self-start' : 'lg:self-stretch'"
+                >
                     <div class="flex items-center gap-3 flex-wrap shrink-0">
                         <div class="text-sm font-semibold">实时预览</div>
                         <span v-if="preview.loading" class="text-xs text-slate-500">解析中…</span>
@@ -79,11 +86,11 @@
                         <!-- 拉伸手柄：盖在列表区底部居中，纵向拖动（任何视口都显示） -->
                         <div
                             data-preview-grip
-                            class="flex absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-4 z-10 cursor-ns-resize items-center justify-center opacity-40 hover:opacity-100 transition-opacity"
+                            class="flex absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-5 z-10 cursor-ns-resize items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
                             title="拖动调整节点列表高度"
                             @mousedown.prevent="startPreviewResize"
                         >
-                            <span class="block w-3 h-1 rounded-full bg-slate-400"></span>
+                            <span class="block w-8 h-1.5 rounded-full bg-slate-500/80"></span>
                         </div>
                     </div>
                 </div>

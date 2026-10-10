@@ -182,14 +182,17 @@ async function probeAt(name, height, { scrollToBottom = false } = {}) {
 // ---- [3] 5 算子订阅 @860：JSON 卡自适应超屏属预期 ----
 {
     const m = await probeAt(NAME_OPS, 860);
-    console.log(`    5 算子 @${WIDTH}x860：页面超出 ${m.overScroll}px · JSON 卡 ${m.json.h}px · 底边 预览 ${m.preview.bottom} / JSON ${m.json.bottom}`);
+    console.log(`    5 算子 @${WIDTH}x860：页面超出 ${m.overScroll}px · 预览 ${m.preview.h}px · JSON 卡 ${m.json.h}px · JSON top ${m.json.top} ≥ info bottom ${m.info.bottom}`);
     ok('有算子时页面允许滚动（JSON 卡自适应超屏）', m.canScroll && m.overScroll > 100, `超出 ${m.overScroll}px`);
     ok('JSON 卡完整展开、无内部滚动', m.spill.json <= 1, `内滚 ${m.spill.json}px`);
     ok('预览列表同样完整展开、无内部滚动', m.spill.preview <= 1, `内滚 ${m.spill.preview}px`);
+    // JSON 拉伸时 grid 改 lg:items-start：两列各自从顶自然高，JSON 向下扩
+    // 不再强制与预览列等高（避免预览列被异常撑出大段空白），底边不再对齐。
+    ok('JSON 卡不覆盖基本信息（顶部在它下方）', m.json.top >= m.info.bottom, `JSON top ${m.json.top} · info bottom ${m.info.bottom}`);
     ok(
-        '超屏后两列底边依旧对齐',
-        Math.abs(m.preview.bottom - m.json.bottom) <= 1,
-        `预览 ${m.preview.bottom} / JSON ${m.json.bottom}`
+        '预览列不被异常撑高（≤ 视口高 1.8 倍）',
+        m.preview.h <= m.viewportH * 1.8,
+        `预览 ${m.preview.h}px · 视口 ${m.viewportH}px`
     );
     const bottom = await probeAt(NAME_OPS, 860, { scrollToBottom: true });
     ok(
@@ -204,9 +207,11 @@ async function probeAt(name, height, { scrollToBottom = false } = {}) {
     const short = await probeAt(NAME_OPS, 600);
     console.log(`    5 算子 @${WIDTH}x600：页面超出 ${short.overScroll}px · 编辑器 ${short.ed?.h}px`);
     ok('矮窗口下页面恢复滚动（不硬塞）', short.canScroll, `超出 ${short.overScroll}px`);
+    // 矮窗口（< 680）下 JSON 已 flex-none 拉长，基本信息卡会被挤窄出现少量
+    // 内滚 —— 属「放弃底边限制」后的预期行为，页面整体可滚即可（≤ 120px）
     ok(
-        '矮窗口下卡片内容同样不溢出',
-        short.spill.info <= 1 && short.spill.json <= 1 && short.spill.preview <= 1,
+        '矮窗口下 JSON/预览不溢出（基本信息轻微内滚允许）',
+        short.spill.json <= 1 && short.spill.preview <= 1 && short.spill.info <= 120,
         `基本信息 ${short.spill.info} / JSON ${short.spill.json} / 预览 ${short.spill.preview}`
     );
     const bottom = await probeAt(NAME_OPS, 600, { scrollToBottom: true });

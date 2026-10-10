@@ -4,8 +4,6 @@
 
 前端是 Vue 3 单页应用；后端同一份 `apps/server/src/`，可部署到 **Cloudflare Worker**
 或**自建 Node / Docker**，两者接口与行为一致，只有存储形态不同。
-其中**格式转换委托给外部** [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended)
-（下称 SCE），其余能力（存储、节点处理、分发、同步、推送、AI）都由本站实现。
 
 ```
 浏览器（Vue 3 SPA）
@@ -20,21 +18,19 @@ SubPilot 服务端 ────────────────────�
    ├── 文档管理    规则集 / 模板 / 片段，生成链接与分享链接
    ├── AI 助手     OpenAI 兼容接口 SSE 代理（API Key 不下发浏览器）
    ├── 同步推送    Gist / WebDAV 备份恢复、Telegram 推送
-   └── 转换        委托 SCE ──► Clash / sing-box / Shadowrocket …
+   └── 转换        调用转换后端 ──► Clash / sing-box / Shadowrocket …
                      ▲
-        /feed/* ─────┘  供 SCE 回拉处理后的节点
+        /feed/* ─────┘  供后端回拉处理后的节点
         /download/*、/share/*   客户端直接拉取（只读分发密钥）
 ```
 
 > **默认转换后端**是作者自建的 SCE 实例，`SUB_BACKEND` 已预置该地址，开箱即用、
-> 公益免费（不承诺可用性，请勿滥用；有稳定性要求请换自建后端）。出处与第三方声明见
+> 公益免费（不承诺可用性，请勿滥用；有稳定性要求请换自建后端）。第三方声明见
 > [`NOTICE`](NOTICE) 与文末「许可」。
 
-**出处引用**：界面与交互承袭前身项目
-[SubPilot-Archive](https://github.com/guanxi660-crypto/SubPilot-Archive)（已归档）；
-算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；
+**出处引用**：算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；
 格式转换由 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended) 提供。
-三者均为 AGPL / GPL 系协议，完整声明见 [`NOTICE`](NOTICE)。
+完整声明见 [`NOTICE`](NOTICE)。
 
 <p align="center">
   <img src="shots/01-概览.png" width="49%" alt="概览" />
@@ -45,18 +41,6 @@ SubPilot 服务端 ────────────────────�
   <img src="shots/08-AI助手.png" width="49%" alt="AI 助手" />
 </p>
 
-## 与转换后端（SCE）的分工
-
-SCE 是**无状态**的转换服务：只有 `/sub`、`/version`、`/healthz` 等少数路由，
-没有存储 API，也不保存你的订阅。于是分工是：
-
-- **本站负责** —— 订阅 / 组合 / 文件的存储与编辑、节点级处理（JSON 算子链）、
-  分发链接与分享码、备份同步、Telegram 推送、AI 助手。这些 SCE 都不提供。
-- **SCE 负责** —— 目标格式转换。转换页（`/sub?target=xxx`）与成品保存走这条路，
-  产出 Clash / sing-box / Shadowrocket 等客户端配置。
-- **分发通道不做转换** —— `/download/*`、`/share/*` 只输出编辑后的订阅原文（见下节），
-  避免下游拿到转换结果再转一次。
-
 ## 分发链接语义（重要）
 
 分享 / 分发链接**只输出编辑后的订阅，不做任何格式转换**（Sub-Store 模式）：
@@ -66,72 +50,11 @@ SCE 是**无状态**的转换服务：只有 `/sub`、`/version`、`/healthz` �
 - `?target=` 参数在分发通道**被忽略**（老链接兼容）。
 
 这样分享出去的链接不会被下游二次转换。需要特定客户端格式时，去**转换页**
-（`/sub?target=xxx`）或保存成品（`/api/converted`）—— 那两条路仍走 SCE。
+（`/sub?target=xxx`）或保存成品（`/api/converted`）—— 只有这两条路会做格式转换。
 
-## 本地开发
+## 部署
 
-```bash
-npm run install:all
-npm run dev:server
-npm run dev:web
-```
-
-三条命令依次是：
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm run install:all` | 安装前后端依赖（逐个包安装，不用 workspaces） |
-| `npm run dev:server` | 起后端（Worker 形态） |
-| `npm run dev:web` | 起前端 dev server |
-
-后端跑起来后打开 `http://127.0.0.1:8795`，令牌填 `dev-local-token`
-（该值来自 `apps/server/wrangler.dev.jsonc`）。前端 dev server 在
-`http://127.0.0.1:5175`，只改界面时用它更方便。
-
-想跑**自建那套**（Node + SQLite，与 Docker 镜像同一份代码）：
-
-```bash
-npm run build
-SUBPILOT_TOKEN=dev-local-token npm start
-```
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm run build` | 构建前端，产物写到 `apps/web/dist` |
-| `npm start` | 起自建形态后端，监听 `http://127.0.0.1:8795`，数据落在 `apps/server/data/` |
-
-> **改完前端要重启服务。** Worker 的 assets 清单在启动时快照，重新 build 后
-> 新 hash 的 JS 会 404（`index.html` 已指向新文件，表现为白屏 + 两个 404）。
-
-## 部署到 Cloudflare Worker
-
-```bash
-cd apps/server
-npx wrangler kv namespace create DATA -c wrangler.jsonc
-npx wrangler secret put SUBPILOT_TOKEN -c wrangler.jsonc
-cd ../..
-npm run deploy
-```
-
-| 命令 | 作用 |
-| --- | --- |
-| `kv namespace create DATA` | 创建 KV 命名空间，**把输出的 id 填回 `wrangler.jsonc`** |
-| `secret put SUBPILOT_TOKEN` | 设置访问令牌（未设置时受保护接口一律 401） |
-| `npm run deploy` | 先 `vite build` 再 `wrangler deploy` |
-
-> 本项目**不能**用纯 API 单文件上传方式部署：Worker 是多模块 + `assets` 静态资源
-> + KV 绑定 + secret，必须走 wrangler。
-
-`wrangler.jsonc` 里的 `name` 必须与线上 Worker 一致 —— 改了名字 `wrangler deploy`
-会**新建**一个 Worker，而自定义域仍指向旧的，表现为「部署成功但线上没变」。
-
-**换自定义域名**：Dashboard → Worker → Settings → Domains & Routes 解绑 / 绑定即可。
-注意已生成的客户端配置里嵌的是**当时请求的 host**，换域后旧的 `/feed/...`、`/download/...`
-地址会失效，需要重新分发。
-
-## 部署到 Docker / Node
-
-同一份 `apps/server/src/`，`apps/server/node/` 把 4 个平台专有能力换掉：
+三种方式，按推荐顺序排列。自建形态（`apps/server/node/`）把 4 个平台专有能力换掉：
 
 | Worker 专有 | 自建替代 |
 | --- | --- |
@@ -140,7 +63,7 @@ npm run deploy
 | `ctx.waitUntil` | 吞异常的 fire-and-forget |
 | `env.*` 环境变量 | 进程环境变量 |
 
-### Docker Compose（推荐）
+### 一、Docker（推荐）
 
 完整可用的 `docker-compose.yml`：
 
@@ -212,9 +135,64 @@ docker compose down
 
 镜像为 `node:22-alpine` 两段构建，非 root 运行，带 `HEALTHCHECK`（探 `/healthz`）。
 
-### 裸 Node
+### 二、Cloudflare Worker（一键部署）
 
-需要 **Node 22.5+**（`node:sqlite` 内置），无需原生编译工具链。
+点下面的按钮，授权 GitHub 与 Cloudflare 后会自动拉仓库并创建 Worker，全程网页操作：
+
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/guanxi660-crypto/SubPilot)
+
+按钮只负责「授权 + 建 Worker」，下面两件事它不会替你做，建完补上即可：
+
+```bash
+cd apps/server
+npx wrangler kv namespace create DATA -c wrangler.jsonc
+npx wrangler secret put SUBPILOT_TOKEN -c wrangler.jsonc
+```
+
+| 步骤 | 说明 |
+| --- | --- |
+| 建 KV 命名空间 | **把命令输出的 id 填回 `wrangler.jsonc`**，否则数据存不下 |
+| 设访问令牌 | 不设置时所有受保护接口一律 401（fail-closed） |
+| 填构建命令 | 前端要先构建，平台的构建命令填 `npm run build`（产物目录 `apps/web/dist`） |
+
+之后本地也能继续部署：
+
+```bash
+cd apps/server
+npx wrangler deploy -c wrangler.jsonc
+npx wrangler secret put SUBPILOT_TOKEN -c wrangler.jsonc
+```
+
+| 命令 | 作用 |
+| --- | --- |
+| `wrangler deploy` | 改完后端代码或重新构建前端后重新部署 |
+| `wrangler secret put SUBPILOT_TOKEN` | 换访问令牌（改完所有已登录设备需重新输入） |
+
+两点容易踩：
+
+- `wrangler.jsonc` 里的 `name` 必须与线上 Worker 一致 —— 改了名字 `wrangler deploy`
+  会**新建**一个 Worker，而自定义域仍指向旧的，表现为「部署成功但线上没变」。
+- **换自定义域名**：Dashboard → Worker → Settings → Domains & Routes 解绑 / 绑定即可。
+  注意已生成的客户端配置里嵌的是**当时请求的 host**，换域后旧的 `/feed/...`、`/download/...`
+  地址会失效，需要重新分发。
+
+### 三、Node / 免费容器平台（zip 上传）
+
+适合 Render、Railway、Koyeb、Zeabur、Northflank 这类「传代码或传包就跑」的免费平台。
+到 [Releases](../../releases) 下载 `subpilot-<版本>-node.zip`（内含后端源码、Node 适配层、
+前端产物与运行时依赖 `yaml`，解压即跑），上传到平台后：
+
+| 配置项 | 取值 |
+| --- | --- |
+| 启动命令 | `node apps/server/node/server.mjs` |
+| 监听端口 | 从环境变量 `PORT` 读取，默认 `8795` |
+| 必填环境变量 | `SUBPILOT_TOKEN` |
+| 持久化 | **必须挂一个持久卷并把 `DB_FILE` 指到卷内**，否则平台重启后数据全丢 |
+
+平台若支持直接用 Dockerfile，把 zip 换成「选本仓库 + 自动识别 Dockerfile」更省事，
+配置与上面一致。
+
+裸机 / 自己的服务器上跑也是同一套：
 
 ```bash
 npm run install:all
@@ -227,6 +205,8 @@ SUBPILOT_TOKEN='<你的令牌>' npm start
 | `npm run install:all` | 安装依赖（含前端构建所需） |
 | `npm run build` | 构建前端到 `apps/web/dist` |
 | `npm start` | 起服务，监听 `http://0.0.0.0:8795` |
+
+需要 **Node 22.5+**（`node:sqlite` 内置），无需原生编译工具链。
 
 ### 环境变量
 
@@ -244,6 +224,41 @@ SUBPILOT_TOKEN='<你的令牌>' npm start
 `/feed/*`、`/download/*` 的地址会被写进客户端配置，取的是**请求的 origin**，
 反代必须传 `X-Forwarded-Proto` 与 `X-Forwarded-Host`，否则会把内网地址写进配置。
 AI 助手是 SSE 长连接，nginx 需关闭该路径的 buffering。
+
+## 本地开发
+
+```bash
+npm run install:all
+npm run dev:server
+npm run dev:web
+```
+
+三条命令依次是：
+
+| 命令 | 作用 |
+| --- | --- |
+| `npm run install:all` | 安装前后端依赖（逐个包安装，不用 workspaces） |
+| `npm run dev:server` | 起后端（Worker 形态） |
+| `npm run dev:web` | 起前端 dev server |
+
+后端跑起来后打开 `http://127.0.0.1:8795`，令牌填 `dev-local-token`
+（该值来自 `apps/server/wrangler.dev.jsonc`）。前端 dev server 在
+`http://127.0.0.1:5175`，只改界面时用它更方便。
+
+想跑**自建那套**（Node + SQLite，与 Docker 镜像同一份代码）：
+
+```bash
+npm run build
+SUBPILOT_TOKEN=dev-local-token npm start
+```
+
+| 命令 | 作用 |
+| --- | --- |
+| `npm run build` | 构建前端，产物写到 `apps/web/dist` |
+| `npm start` | 起自建形态后端，监听 `http://127.0.0.1:8795`，数据落在 `apps/server/data/` |
+
+> **改完前端要重启服务。** Worker 的 assets 清单在启动时快照，重新 build 后
+> 新 hash 的 JS 会 404（`index.html` 已指向新文件，表现为白屏 + 两个 404）。
 
 ## 目录结构
 

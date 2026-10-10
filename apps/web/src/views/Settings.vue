@@ -143,10 +143,12 @@
                              此前这里回显掩码正文（sk-1****cdef）：既把密钥的首尾各 4 位
                              摆在页面上，又和「同步」页的圆点不一致 —— 用户要确认的是
                              「存过没有」，不是「存的是什么」。掩码挪到 title 里，
-                             鼠标悬停仍可核对是哪一把。 -->
+                             鼠标悬停仍可核对是哪一把。
+                             不额外指定颜色：跟随 .input 的正文色（亮色下是深色、
+                             暗色下是浅色），和同步页那几个真密钥框里的圆点一致。 -->
                         <span
                             v-if="settings.ai?.hasApiKey"
-                            class="text-slate-400 tracking-[0.2em]"
+                            class="tracking-[0.2em]"
                             :title="settings.ai.apiKeyMask"
                         >••••••••</span>
                         <span v-else class="text-slate-500">未设置</span>

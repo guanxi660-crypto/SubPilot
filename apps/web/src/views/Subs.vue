@@ -134,7 +134,7 @@ import { api } from '../stores/auth.js';
 import EmptyState from '../components/EmptyState.vue';
 import NodeList from '../components/NodeList.vue';
 import TgPushButton from '../components/TgPushButton.vue';
-import { loadOperatorMeta, sceTargets } from '../stores/operators.js';
+import { loadOperatorMeta } from '../stores/operators.js';
 
 const router = useRouter();
 const message = useMessage();
@@ -151,20 +151,15 @@ function setCols(n) {
     localStorage.setItem(COLS_KEY, String(cols.value));
 }
 
-/** 复制订阅下拉：常用目标格式 + 「全部格式…」跳转换页 */
+/** 复制订阅下拉：v2ray通用（raw）与 Clash / Mihomo + 「全部格式…」跳转换页 */
 const copyTargets = ref([]);
 function buildCopyTargets() {
-    // v2ray / mixed (base64) 已移除 —— v2ray 通用订阅由 raw 通道提供（服务端本地产出，
-    // 不依赖转换后端），见 convert.js 的 target=raw 分支。
-    const common = ['clash', 'singbox', 'shadowrocket', 'vless', 'ss'];
-    const list = sceTargets.value.length ? sceTargets.value : [];
-    const picked = common
-        .map((v) => list.find((t) => t.value === v))
-        .filter(Boolean)
-        .map((t) => ({ label: t.label, key: t.value }));
+    // 只保留两个有用的目标：v2ray 通用（raw，服务端本地产出，不依赖转换后端，
+    // 见 convert.js 的 target=raw 分支）与 Clash / Mihomo。
+    // singbox / shadowrocket / vless / ss 等其余格式用不上，已移除（2026-10-10）。
     copyTargets.value = [
         { label: 'v2ray通用', key: 'raw' },
-        ...(picked.length ? picked : common.map((v) => ({ label: v, key: v }))),
+        { label: 'Clash / Mihomo', key: 'clash' },
         { type: 'divider', key: 'd1' },
         { label: '更多格式 → 转换页', key: '__more' },
     ];

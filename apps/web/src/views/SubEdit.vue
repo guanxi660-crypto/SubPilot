@@ -174,17 +174,20 @@
                             class="mt-3 flex-1 min-h-0 flex flex-col relative"
                             :class="contentEdH == null ? '' : 'lg:flex-none'"
                         >
-                            <!-- h-6 固定行高：「↺ 自适应」按钮手动模式才出现，
-                                 若行高随内容走，按钮出现会把编辑器往下顶 10px，
-                                 拖动换算就差 10（JSON 卡多移 10、底边错位 10） -->
+                            <!-- h-6 固定行高：按钮常驻（切换态高度变化不顶行），拖动换算不差像素 -->
                             <div class="flex items-center shrink-0 h-6">
                                 <label class="text-xs text-slate-500">节点内容（URI 列表或 Clash YAML）</label>
                                 <button
+                                    class="btn-ghost !py-0.5 !px-1.5 text-[12px] leading-none ml-auto"
+                                    :title="edExpanded ? '收起：恢复自适应高度' : '拉伸：完整展开内容'"
+                                    @click="toggleEdExpand"
+                                >{{ edExpanded ? '⤡' : '⤢' }}</button>
+                                <button
                                     v-if="contentEdH != null"
-                                    class="btn-ghost !py-0.5 !px-1.5 text-[10px] ml-auto"
+                                    class="btn-ghost !py-0.5 !px-1.5 text-[10px]"
                                     title="恢复跟随窗口的自适应高度"
                                     @click="resetEdHeight"
-                                >↺ 自适应</button>
+                                >↺</button>
                             </div>
                             <NodeContentEditor
                                 v-model="form.content"
@@ -316,6 +319,8 @@ const contentEdWrap = ref(null);
 // 预览节点列表的手动高度（null = 跟随布局）
 const previewListH = ref(null);
 const previewCardEl = ref(null);
+// ⤢ 拉伸切换：false = 自适应（800 上限），true = 内容完整展开
+const edExpanded = ref(false);
 
 const EDITOR_MIN = 140;
 const EDITOR_MAX = 3000;
@@ -439,7 +444,10 @@ function recomputeAuto() {
         } else {
             const cm = ed.querySelector('.cm-content');
             const ch = (cm ? cm.offsetHeight : ed.scrollHeight) + 16;
-            edNeed = Math.min(Math.max(ch, EDITOR_MIN), EDITOR_AUTO_MAX);
+            // 拉伸态（⤢ 切换）：上限放开到 EDITOR_MAX 完整展开；
+            // 默认态：clamp 800，超长内容转编辑器内部滚动。
+            const cap = edExpanded.value ? EDITOR_MAX : EDITOR_AUTO_MAX;
+            edNeed = Math.min(Math.max(ch, EDITOR_MIN), cap);
         }
     }
     const infoNeed = ed ? infoChrome + Math.max(EDITOR_MIN, edNeed) : info.scrollHeight;
@@ -465,6 +473,16 @@ function resetEdHeight() {
     contentEdH.value = null;
     edDragMinH.value = null;
     gridBaseH.value = null;
+    edExpanded.value = false; // ↺ 恢复的语义含退出拉伸态
+    nextTick(recomputeAuto);
+}
+
+/** ⤢/⤡ 切换：拉伸 = 内容完整展开（上限放开）；默认 = 自适应（800 上限） */
+function toggleEdExpand() {
+    // 切换前清手动拖动状态，两个互斥：按钮切换以内容自适应为基础
+    if (contentEdH.value != null) resetEdHeight();
+    edExpanded.value = !edExpanded.value;
+    nextTick(recomputeAuto);
 }
 
 // 算子增删/改参、视口变化都会改变 JSON 卡内容需求 → 重算

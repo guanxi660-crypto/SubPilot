@@ -34,18 +34,9 @@ SubPilot 服务端 ────────────────────�
 **出处引用**：算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；
 完整第三方声明见 `NOTICE` 与文末「许可」。
 
-<p align="center">
-  <img src="shots/01-概览.png" width="49%" alt="概览" />
-  <img src="shots/02-订阅.png" width="49%" alt="订阅管理" />
-</p>
-<p align="center">
-  <img src="shots/06-转换.png" width="49%" alt="转换" />
-  <img src="shots/08-AI助手.png" width="49%" alt="AI 助手" />
-</p>
-
 ## 部署
 
-三种方式，按推荐顺序排列。自建形态（`apps/server/node/`）把 4 个平台专有能力换掉：
+自建形态（`apps/server/node/`）把 4 个平台专有能力换掉：
 
 | Worker 专有 | 自建替代 |
 | --- | --- |
@@ -203,24 +194,7 @@ SUBPILOT_TOKEN='<你的令牌>' npm start
 
 需要 **Node 22.5+**（`node:sqlite` 内置），无需原生编译工具链。
 
-### 环境变量
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `SUBPILOT_TOKEN` | 空 | **访问令牌，为空时所有受保护接口 401**（fail-closed）。必填 |
-| `SUB_BACKEND` | `https://subpilot.57995799.xyz` | 转换后端（SCE）地址。**项目已预置公益默认后端，留空即用它**；想换自建实例就填自己的地址，也可登录后在「转换」页改 |
-| `DB_FILE` | `apps/server/data/subpilot.db` | SQLite 文件位置（容器内 `/data/subpilot.db`） |
-| `PORT` | `8795` | 监听端口 |
-| `HOST` | `0.0.0.0` | 监听地址 |
-| `ASSETS_DIR` | `apps/web/dist` | 前端产物目录 |
-
-### 反向代理
-
-`/feed/*`、`/download/*` 的地址会被写进客户端配置，取的是**请求的 origin**，
-反代必须传 `X-Forwarded-Proto` 与 `X-Forwarded-Host`，否则会把内网地址写进配置。
-AI 助手是 SSE 长连接，nginx 需关闭该路径的 buffering。
-
-## 本地开发
+### 四、本地开发
 
 ```bash
 npm run install:all
@@ -254,6 +228,23 @@ SUBPILOT_TOKEN=dev-local-token npm start
 
 > **改完前端要重启服务。** Worker 的 assets 清单在启动时快照，重新 build 后
 > 新 hash 的 JS 会 404（`index.html` 已指向新文件，表现为白屏 + 两个 404）。
+
+### 环境变量
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `SUBPILOT_TOKEN` | 空 | **访问令牌，为空时所有受保护接口 401**（fail-closed）。必填 |
+| `SUB_BACKEND` | `https://subpilot.57995799.xyz` | 转换后端（SCE）地址。**项目已预置公益默认后端，留空即用它**；想换自建实例就填自己的地址，也可登录后在「转换」页改 |
+| `DB_FILE` | `apps/server/data/subpilot.db` | SQLite 文件位置（容器内 `/data/subpilot.db`） |
+| `PORT` | `8795` | 监听端口 |
+| `HOST` | `0.0.0.0` | 监听地址 |
+| `ASSETS_DIR` | `apps/web/dist` | 前端产物目录 |
+
+### 反向代理
+
+`/feed/*`、`/download/*` 的地址会被写进客户端配置，取的是**请求的 origin**，
+反代必须传 `X-Forwarded-Proto` 与 `X-Forwarded-Host`，否则会把内网地址写进配置。
+AI 助手是 SSE 长连接，nginx 需关闭该路径的 buffering。
 
 ## 许可
 

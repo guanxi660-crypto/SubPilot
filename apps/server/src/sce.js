@@ -36,16 +36,6 @@ const BOOLEAN_PARAMS = new Set([
 /**
  * SCE 的显式目标格式（Wiki「当前 Release 目标格式」）。
  *
- * 2026-10-09 按 `docs/目标格式体检报告.md` 做过一次裁剪：用一份真实订阅逐格式实测，
- * 只保留「能稳定拿到完整节点」的格式。已下线的 12 项及原因：
- *   clashr / surge / quanx / loon / surfboard / stash —— 均为「客户端自拉」模式，
- *     结果体里本就不含节点，且实测出短板（surge 远程资源段异常、stash 直接 400、
- *     quanx 不生成远程资源段），对普通用户是纯噪声；
- *   quan / mellow —— 配置型转换，实测只出 1 个节点，形同废格式；
- *   v2rayn / v2rayng —— 与 shadowrocket 高度重叠，且会丢后量子加密 vless 节点；
- *   ssd / sssub —— 与 ss / ssr 重叠，无独立价值。
- * 若后续 SCE 上游修好这些格式，可参考报告里的对照实验方式重新评估后加回。
- *
  * v2ray（base64）与 mixed（base64）更早已移除：
  * v2ray 通用订阅改走本站 raw 通道（/sub?target=raw，不依赖 SCE），见 convert.js。
  *

@@ -84,7 +84,7 @@ SUBPILOT_TOKEN=dev-local-token npm start        # → http://127.0.0.1:8795，�
 node scripts/verify.mjs                  # 接口验证（检测到真实数据时自动跳过写入类断言）
 node scripts/verify-security.mjs         # 53 项安全回归（常量时间比较 / 明文令牌 / 安全头 / 协议白名单）
 node scripts/verify-hardening.mjs        # 172 项加固回归（SSRF 逐跳复检 / 失败限流 / 正文上限 / 来源 IP / 设置备份 / 并发写）
-node scripts/verify-convert-link.mjs     # 40 项成品链接回归（后端格式 / host 跟随自定义后端 / 参数不漂移）
+node scripts/verify-convert-link.mjs     # 48 项成品链接回归（后端格式 / host 跟随自定义后端 / 参数不漂移 / 与分发链接同一条 feed）
 node scripts/verify-regions.mjs          # 56 项地区识别回归（纯函数）
 node scripts/verify-operators.mjs        # 11 项算子回归（纯函数）
 node scripts/verify-presets.mjs          # 104 条配置预设与 SubPilot-Archive 逐字一致

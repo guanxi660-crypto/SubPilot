@@ -11,6 +11,9 @@
 //     feed 地址拉一次，200 才算数；
 //   · host 跟随设置里的自定义后端；
 //   · 管理令牌绝不进链接；
+//   · **成品链接里的 feed 与分发链接（/api/link）给的 feed 是同一条** ——
+//     两边都走 deriveFeedKey(env, settings, kind, name)，任何一边换了 kind / name /
+//     基地址，用户手里就会出现「两条看着都对、实际只有一条能拉」的链接；
 //   · target=raw / 缺来源 / 订阅不存在 各自给对的状态码。
 //
 // 用法：node scripts/verify-convert-link.mjs [baseUrl]
@@ -232,6 +235,59 @@ ok('链接不含内部参数（sub=）', !oneQ?.has('sub') && !oneQ?.has('collec
     }
     ok('/sub 单订阅仍然可用', status === 200, `HTTP ${status}`);
     ok('/sub 仍走本地处理路径', processed === 'local', `Processed=${processed || '(无)'}`);
+}
+
+// ---- [10] 成品链接里的 feed == 分发链接的 feed ----
+//
+// 这条断言是被一张线上截图逼出来的：产出卡上「成品链接」和「订阅分发链接」两行的
+// `?ft=` 串肉眼看着不一样 —— 实际是低分辨率 OCR 的错觉（base64url 的 i/X、d/e、w/a
+// 缩放后极易混）。但「看着像、又没法一眼确认」本身就说明这里缺一条断言：
+// 两条链接必须指向**同一条** feed，否则用户手里会出现一条能拉、一条 403 的组合。
+//
+// 两边都走 deriveFeedKey(env, settings, kind, name)，理论上必然相同；
+// 一旦哪天有人给其中一边换了 kind / name / publicBase，这里立刻会红。
+{
+    const strip = (u) => String(u || '').replace(/^tag:[^,]+,provider:[^,]+,/, '');
+    const ftOf = (u) => /[?&]ft=([^&]+)/.exec(String(u || ''))?.[1] || '';
+
+    // 单个本站订阅
+    const lk = await (await fetch(`${BASE}/api/link?kind=sub&name=${encodeURIComponent(A)}`, { headers: H })).json();
+    const shareFeed = lk.data?.feedUrl || '';
+    const clFeed = strip(oneQ?.get('url'));
+    ok('订阅：两条链接的 feed 逐字相同', !!shareFeed && shareFeed === clFeed, shareFeed === clFeed ? '一致' : `分发 ${shareFeed} vs 成品 ${clFeed}`);
+    ok('订阅：ft 串相同', !!ftOf(shareFeed) && ftOf(shareFeed) === ftOf(clFeed), ftOf(clFeed) || '(无)');
+
+    // 反面对照：A 的成品 feed 必须**不等于** B 的分发 feed。
+    // 少了这条，「相同」有可能只是两边都空、或都比了同一个变量 —— 断言没牙齿。
+    const lkB = await (await fetch(`${BASE}/api/link?kind=sub&name=${encodeURIComponent(B)}`, { headers: H })).json();
+    ok(
+        '反面对照：A 的 feed ≠ B 的 feed（证明比较有意义）',
+        !!lkB.data?.feedUrl && lkB.data.feedUrl !== clFeed,
+        lkB.data?.feedUrl === clFeed ? '两条订阅给出了同一条 feed' : '',
+    );
+
+    // 组合（kind=col 是另一条派生分支，同样要对得上）
+    const COL = '_vt_clink_col';
+    const cr = await fetch(`${BASE}/api/collections`, {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({ name: COL, subscriptions: [A] }),
+    });
+    ok('播种组合', cr.status === 201 || cr.status === 200, `HTTP ${cr.status}`);
+    if (cr.ok) {
+        const clCol = await linkOf({ collection: COL, target: 'clash' });
+        const lkCol = await (await fetch(`${BASE}/api/link?kind=col&name=${encodeURIComponent(COL)}`, { headers: H })).json();
+        const colRaw = new URL(clCol.data.url || '').searchParams.get('url') || '';
+        const colFeedShare = lkCol.data?.feedUrl || '';
+        const colFeedCl = strip(colRaw);
+        ok('组合：两条链接的 feed 逐字相同', !!colFeedShare && colFeedShare === colFeedCl, colFeedShare === colFeedCl ? '一致' : `分发 ${colFeedShare} vs 成品 ${colFeedCl}`);
+        ok('组合：ft 串相同', !!ftOf(colFeedShare) && ftOf(colFeedShare) === ftOf(colFeedCl), ftOf(colFeedCl) || '(无)');
+        // 组合没有 displayName → provider 名回落成组合名（不是路径、也不是 sp:// 引用）
+        ok('组合：provider 名用的是组合名', colRaw.startsWith(`tag:${COL},provider:${COL},`), colRaw.slice(0, 40));
+        await fetch(`${BASE}/api/collection/${encodeURIComponent(COL)}`, { method: 'DELETE', headers: H });
+        const after = await (await fetch(`${BASE}/api/collections`, { headers: H })).json();
+        ok('收尾：临时组合已清理', !(after.data || []).some((c) => c.name === COL));
+    }
 }
 
 // ---- 收尾 ----

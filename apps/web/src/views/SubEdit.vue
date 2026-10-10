@@ -307,6 +307,11 @@ const jsonFlexNone = ref(false);
 // 以它为基准换算网格最小高度 —— 不能用「当前网格高度」当基准，
 // 否则向上拖回时 max() 会卡在上一次顶高的高度上回不来。
 const gridBaseH = ref(null);
+// 一屏基线：首次 recomputeAuto（网格未被顶高时）记录网格实际高度。
+// over 判定用「need > 基线」而非写死 682 —— 视口高度不同（860/1200）时
+// 一屏可用空间不同，写死阈值会误触发拉伸态（1200 视口 686 需求根本
+// 装得下，却因 > 682 被判超屏，mb-16/self-start 全部误启动）。
+const oneScreenH = ref(null);
 const contentEdWrap = ref(null);
 // 预览节点列表的手动高度（null = 跟随布局）
 const previewListH = ref(null);
@@ -314,6 +319,7 @@ const previewCardEl = ref(null);
 
 const EDITOR_MIN = 140;
 const EDITOR_MAX = 3000;
+const EDITOR_AUTO_MAX = 800; // 内容自适应上限：超过转为编辑器内部滚动
 const JSON_GAP = 16; // 右列两张卡的 gap-4
 
 /** 三股需求的合成值；都不干预时不输出 style */
@@ -341,19 +347,24 @@ function startEdResize(e) {
     if (!ed) return;
     // 起点全部量一次，拖动过程中只做算术（布局在变，不能边拖边量）
     const edH0 = ed.getBoundingClientRect().height;
-    if (gridBaseH.value == null) {
-        const grid = document.querySelector('main .grid');
-        gridBaseH.value = grid ? Math.round(grid.getBoundingClientRect().height) : 0;
-    }
-    const base = gridBaseH.value;
+    // info 卡内编辑器以外的固定部分（标题 + 表单 + label + padding）
+    const infoCard = wrap.closest('.card');
+    const infoChrome = infoCard ? infoCard.offsetHeight - edH0 : 0;
+    // JSON 卡当前高度（flex-[1] 时可能高于 240 下限，按实际值算）
+    const jsonCard = [...document.querySelectorAll('main .card')].find((c) =>
+        (c.innerText || '').trimStart().startsWith('JSON 脚本处理')
+    );
+    const jsonH0 = jsonCard ? Math.round(jsonCard.offsetHeight) : 240;
     const startY = e.clientY;
 
     beginDrag(e, (ev) => {
         const h = Math.round(Math.min(EDITOR_MAX, Math.max(EDITOR_MIN, edH0 + ev.clientY - startY)));
         contentEdH.value = h;
-        // 编辑器长多少网格顶高多少（不低于一屏基线）；向上缩时网格
-        // 回到一屏、JSON 卡随之变高，底边始终对齐
-        edDragMinH.value = Math.round(Math.max(base, base + (h - edH0)));
+        // info 卡切 flex-none 后，右列总需求 = infoChrome + h + gap + jsonNow。
+        // 必须按这个顶网格 —— 不能用 flex 压缩后的一屏基线（682）做加法：
+        // 右列固有需求比压缩基线高几像素，差额会让 JSON 卡溢出 row 底部、
+        // 两列底边错位。不低于一屏（680+2）保证向上缩时网格回得去。
+        edDragMinH.value = Math.round(Math.max(682, infoChrome + h + JSON_GAP + jsonH0));
     });
 }
 
@@ -401,6 +412,12 @@ function recomputeAuto() {
     }
     const ed = info.querySelector('.code-editor');
 
+    // 一屏基线：只在网格未被顶高（autoMinH=null）时记录一次
+    if (oneScreenH.value == null) {
+        const grid = document.querySelector('main .grid');
+        if (grid) oneScreenH.value = Math.round(grid.getBoundingClientRect().height);
+    }
+
     // 列表内容实高：子元素求和 + space-y-2（8px）间距
     const kids = [...list.children];
     const listContent = kids.length
@@ -408,9 +425,24 @@ function recomputeAuto() {
         : 0;
 
     const infoChrome = ed ? info.offsetHeight - ed.offsetHeight : 0;
-    const infoNeed = ed
-        ? infoChrome + Math.max(EDITOR_MIN, contentEdH.value ?? EDITOR_MIN)
-        : info.scrollHeight;
+    // 编辑器需求：手动拖动值优先；自动模式测 CodeMirror 内容实高 ——
+    // 用 .cm-content 的 offsetHeight 而非 scrollHeight（后者在内容少于
+    // 可视时虚报为可视高，删内容后缩不回去，与 JSON 卡同坑）。
+    // clamp 到 [下限, 800]：超长内容不再无限撑高页面，转为编辑器内部滚动。
+    let edNeed = EDITOR_MIN;
+    if (ed) {
+        if (contentEdH.value != null) {
+            // 手动拖动：高度由 edDragMinH 独立顶网格，不参与拉伸态判定 ——
+            // 若把手动高度计入 rightNeed，拖大编辑器就会误触发 jsonFlexNone
+            // （预览 self-start + mb-16），底边对齐被误破。
+            edNeed = EDITOR_MIN;
+        } else {
+            const cm = ed.querySelector('.cm-content');
+            const ch = (cm ? cm.offsetHeight : ed.scrollHeight) + 16;
+            edNeed = Math.min(Math.max(ch, EDITOR_MIN), EDITOR_AUTO_MAX);
+        }
+    }
+    const infoNeed = ed ? infoChrome + Math.max(EDITOR_MIN, edNeed) : info.scrollHeight;
     const jsonChrome = json.offsetHeight - list.offsetHeight;
     const jsonNeed = jsonChrome + listContent;
     const rightNeed = Math.round(infoNeed + JSON_GAP + jsonNeed);
@@ -420,11 +452,11 @@ function recomputeAuto() {
         leftNeed = previewCardEl.value.scrollHeight; // 手动模式卡片高度=内容
     }
     const need = Math.round(Math.max(rightNeed, leftNeed));
-    // 需求没超过网格 CSS 下限（680）就保持 3:1 弹性分配，让「锁定一屏」照常生效；
-    // 超过一屏 → JSON 卡切 flex-none（高度=内容），网格按需求顶高。
-    // 3:1 比例本身不知道内容需求：若只顶网格不切 flex-none，多出来的空间
-    // 会按 3:1 全塞给信息卡，JSON 卡永远只有 1/4、继续内滚。
-    const over = need > 682;
+    // over 判定：需求超过一屏基线（动态，随视口）才进拉伸态。
+    // 容差 8px：flex 分配与需求测量天然差几个像素（flex 收缩 vs max-content），
+    // 容差太小会让「恰好贴着一屏」的内容误触发拉伸态。
+    const threshold = oneScreenH.value != null ? oneScreenH.value + 8 : 690;
+    const over = need > threshold;
     autoMinH.value = over ? need : null;
     jsonFlexNone.value = over;
 }
@@ -437,9 +469,26 @@ function resetEdHeight() {
 
 // 算子增删/改参、视口变化都会改变 JSON 卡内容需求 → 重算
 watch(() => form.process, () => nextTick(recomputeAuto), { deep: true });
+// 节点内容变化 → 编辑器内容需求变化 → 重算（手动模式不干预）。
+// debounce 200ms：输入是高频事件，recomputeAuto 读布局会触发 reflow。
+let edAutoTimer = null;
+watch(
+    () => form.content,
+    () => {
+        if (contentEdH.value != null) return;
+        clearTimeout(edAutoTimer);
+        edAutoTimer = setTimeout(() => nextTick(recomputeAuto), 200);
+    }
+);
 onMounted(() => {
     nextTick(recomputeAuto);
-    window.addEventListener('resize', recomputeAuto);
+    // 视口变化 → 一屏基线失效 → 先清顶高回一屏，重排后记新基线再重算
+    window.addEventListener('resize', () => {
+        oneScreenH.value = null;
+        autoMinH.value = null;
+        jsonFlexNone.value = false;
+        nextTick(recomputeAuto);
+    });
 });
 onBeforeUnmount(() => {
     window.removeEventListener('resize', recomputeAuto);

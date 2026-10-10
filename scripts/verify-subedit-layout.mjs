@@ -61,6 +61,15 @@ const api = (p, o = {}) => fetch(`${BASE}${p}`, { ...o, headers: { ...H, ...(o.h
 console.log(`\n== 订阅编辑页布局回归 @ ${BASE} ==\n`);
 
 // ---- 播种：两条本地订阅 ----
+// 无算子档用超短 URI（不换行、内容需求低于编辑器下限 140）—— 守「一屏锁定」
+// 语义。0.1.1 起编辑器内容会自动撑高网格，长 URI 换行后内容需求超一屏
+// 会进入拉伸态（那是 verify-edauto2 的守卫范围）。
+// 无算子档用超短 URI 且只 5 条 —— 一屏锁定下编辑器配额仅约 140px（6 行），
+// 内容需求超过就会顶破一屏进拉伸态（那是 verify-edauto2 的守卫范围）。
+const NODES_PLAIN = Array.from(
+    { length: 5 },
+    (_, i) => `ss://a${i + 1}@1.2.3.${i + 1}:443#节点${i + 1}`
+).join('\n');
 const NODES = Array.from(
     { length: 15 },
     (_, i) =>
@@ -75,15 +84,15 @@ const PROCESS = [
     { type: 'Sort Operator', args: { sort: 'asc', by: 'region' } },
 ];
 
-for (const [name, process] of [
-    [NAME_PLAIN, []],
-    [NAME_OPS, PROCESS],
+for (const [name, process, content] of [
+    [NAME_PLAIN, [], NODES_PLAIN],
+    [NAME_OPS, PROCESS, NODES],
 ]) {
     const r = await api('/api/subs', {
         method: 'POST',
-        body: JSON.stringify({ name, source: 'local', content: NODES, process }),
+        body: JSON.stringify({ name, source: 'local', content, process }),
     });
-    ok(`播种 ${name}${process.length ? '（15 节点 + 5 算子）' : '（15 节点，无算子）'}`, r.status === 201 || r.status === 200, `HTTP ${r.status}`);
+    ok(`播种 ${name}${process.length ? '（15 节点 + 5 算子）' : '（5 节点短内容，无算子）'}`, r.status === 201 || r.status === 200, `HTTP ${r.status}`);
 }
 
 const browser = await chromium.launch({ executablePath: exe });

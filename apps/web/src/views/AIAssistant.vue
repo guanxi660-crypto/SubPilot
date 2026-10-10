@@ -19,6 +19,7 @@
             </div>
             <div class="text-[11px] mt-1" :class="pendingProposal ? 'text-emerald-300/80' : 'text-slate-600'">
                 {{ pendingProposal ? '正在预览最新 AI 提案（未落库）' : '预览当前草稿算子链' }}
+                · Worker 延迟可能会到 10 秒
             </div>
             <div v-if="preview.error" class="text-xs text-rose-300/80 mt-3">{{ preview.error }}</div>
             <div

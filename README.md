@@ -199,32 +199,6 @@ Dockerfile docker-compose.yml .env.example
 LICENSE (AGPL-3.0-only)  NOTICE
 ```
 
-## 已知限制
-
-以下都是**当前实现的实际行为**，不是待办清单，写出来是为了让部署者心里有数：
-
-| 项 | 现状 | 影响 |
-| --- | --- | --- |
-| 限流是**进程内**的 | 令牌失败计数存在进程内存里（`ratelimit.js`），5 分钟窗口 / 20 次失败 / 封禁 15 分钟。正确令牌永远放行（不会把自己锁在门外） | 自建单进程能真正拦住；Cloudflare Workers 的内存态**单 isolate**，跨 isolate / 跨 colo 不共享，只是显著提高爆破成本。要硬保证得用边缘 Rate Limiting 规则或 Durable Object |
-| SSRF 复核有两条盲区 | 出网守卫已统一收口（`netguard.js`），但 ① Workers 运行时拿不到 DNS，只做字面检查；② 本机 DNS 是 Clash / mihomo 的 **fake-IP** 模式时，所有域名都解析到 `198.18.0.0/15`，解析复核自动跳过 | 挡得住「直接填内网 IP / 内网域名」（含十进制、十六进制、短写等混淆形式），挡不住「公网域名解析到内网」—— 自建侧能挡，Workers 侧不能。**自建部署仍建议在外层防火墙限制出网** |
-| 跨进程并发写仍可能丢 | `mutate()` 已在进程内串行化；SQLite 驱动另有 `rev` 乐观锁，冲突时重放一次 | 同一进程内的并发写不会丢（含「保存成品」撞上「TG 即时推送写 lastPush」这种组合）；Workers 多 isolate / 跨 colo 仍是 last-write-wins，那需要 Durable Object |
-| `TRUST_PROXY` 配错会让 IP 不可信 | 自建侧默认只信 `socket.remoteAddress`，并**先删掉**客户端自带的 IP 头；只有显式设 `TRUST_PROXY=1` 才取 `X-Forwarded-For` 的最后一跳 | 前面没有反代却开了 `TRUST_PROXY`，等于把 IP 头交回给客户端，分发统计的 IP 维度就不可信了。Cloudflare 部署下这些头由平台覆写，不受影响 |
-| 无 CSP | 只加了 `nosniff` / `X-Frame-Options` / `Referrer-Policy` | 前端大量内联 style，收紧 `style-src` 会直接打坏布局，需要单独评估 |
-
-**各处上限一览**（超限一律明确拒绝并说明当前体积，不会 500）：
-订阅正文 8MiB（`413`）、文件 512KiB、成品 16MiB、算子链 20000 条、
-分享码 900 条、统计条目 5000 条、备份单包 20MiB、模板 50 条 × 100 算子。
-
-安全响应头的落地方式分两处，改的时候别漏：**Worker 生成的响应**由
-`apps/server/src/index.js` 的 `withSecurityHeaders()` 加；**静态资源**（`index.html`、
-`/assets/*`）由 Cloudflare 边缘直接返回、根本不进 Worker，所以走 `apps/web/public/_headers`。
-本地 Node 部署两者都经 Worker，看不出这个差别。
-
-## 关于默认转换后端
-
-仓库中 `SUB_BACKEND` 指向作者自建的 SCE 实例，**公益免费提供**，不承诺可用性、
-稳定性与实时性，请勿滥用；长期使用或对稳定性有要求时请换自建后端。
-
 ## 许可
 
 AGPL-3.0-only，见 [LICENSE](LICENSE)。第三方组件与出处见 [NOTICE](NOTICE)。

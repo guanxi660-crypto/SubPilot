@@ -235,7 +235,7 @@ async function buildFeedUrl(env, snap, { base, sub, collection, adhoc }) {
  *   process=<base64>    临时算子链（JSON 数组的 base64）
  *   direct=1            强制不本地处理，原样交给 SCE
  */
-export async function handleSub(request, env, ctx, { query, method, tokenFromAuth }) {
+export async function handleSub(request, env, ctx, { query, method, tokenFromAuth, rawFallbackTarget = '' }) {
     const snap = await loadSnapshot(env);
     const base = resolveBackend(env, snap.settings);
     const params = extractParams(query);
@@ -294,17 +294,25 @@ export async function handleSub(request, env, ctx, { query, method, tokenFromAut
         } catch (e) {
             return fail(`节点处理失败：${e.message || e}`, 500);
         }
-        // serializeNodes 的非 clash 分支就是 base64(URI 列表)；clash 来源的节点没有
-        // 原始 URI 载体，转不成 v2ray 订阅，明确报错让用户换 clash 等目标格式。
+
+        // 来源全是 clash 形态节点时没有 URI 载体可输出：
+        //   · 显式 target=raw —— 报错引导换目标格式；
+        //   · 分发通道的默认 raw（rawFallback 有值）—— 回落到站点默认客户端
+        //     格式走 SCE，保证分享链接至少能拉到东西（clash 来源本来就不存在
+        //     「通用形态」，回落不算二次转换问题）。
         if (!result.nodes.some((n) => n.raw)) {
-            return fail('来源中没有 URI 形态的节点（clash 配置无法转成 v2ray 订阅，请用 clash 等目标格式）', 400);
+            if (!rawFallbackTarget) {
+                return fail('来源中没有 URI 形态的节点（clash 配置无法转成 v2ray 订阅，请用 clash 等目标格式）', 400);
+            }
+            params.target = rawFallbackTarget;
+        } else {
+            return text(serializeNodes(result.nodes, 'uri'), 200, 'text/plain;charset=UTF-8', {
+                'Cache-Control': 'no-store',
+                'X-SubPilot-Nodes': String(result.nodes.length),
+                'X-SubPilot-Format': 'uri',
+                'Access-Control-Allow-Origin': '*',
+            });
         }
-        return text(serializeNodes(result.nodes, 'uri'), 200, 'text/plain;charset=UTF-8', {
-            'Cache-Control': 'no-store',
-            'X-SubPilot-Nodes': String(result.nodes.length),
-            'X-SubPilot-Format': 'uri',
-            'Access-Control-Allow-Origin': '*',
-        });
     }
 
     const forceDirect = params.direct === '1' || params.direct === 'true';
@@ -549,7 +557,21 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
         q.set('sub', name);
     }
 
-    const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth });
+    // 分发通道无 target = 通用订阅（v2ray base64 URI，本地 pipeline 产出）。
+    // 归档版 Sub-Store 语义：分享链接默认输出**可再解析**的原始节点列表，
+    // 客户端直接可用、当转换输入也不会二次转换翻车；不带 target 就落到
+    // handleSub 的默认 clash 的话，分享出去的是转换后配置 —— 被当成订阅
+    // 源再转一次（二次转换）会解析不出节点。需要特定客户端格式时显式
+    // ?target=clash / singbox，走 SCE 实时转换。
+    if (!q.has('target')) q.set('target', 'raw');
+
+    const res = await handleSub(request, env, ctx, {
+        query: q,
+        method,
+        tokenFromAuth,
+        // 分发默认 raw 拉不到 URI 节点（clash 来源）时回落站点默认格式
+        rawFallbackTarget: snap.settings.defaultTarget || 'clash',
+    });
 
     // 统计只记成功分发（失败也记的话会污染「拉取次数」这个指标）
     if (res.ok && ctx?.waitUntil) {
@@ -639,7 +661,16 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     if (kind === 'sub') q.set('sub', name);
     else q.set('collection', name);
 
-    const res = await handleSub(request, env, ctx, { query: q, method, tokenFromAuth: '' });
+    // 与 /download 同语义：分享码通道无 target = 通用订阅（raw），
+    // 避免默认 clash 的转换后格式被下游二次转换（见 handleDownload 注释）。
+    if (!q.has('target')) q.set('target', 'raw');
+
+    const res = await handleSub(request, env, ctx, {
+        query: q,
+        method,
+        tokenFromAuth: '',
+        rawFallbackTarget: snap.settings.defaultTarget || 'clash',
+    });
     if (res.ok && ctx?.waitUntil) {
         ctx.waitUntil(
             recordPull(env, {
@@ -658,7 +689,9 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
  * 生成分发链接。给前端「复制订阅」用。
  *
  * 返回两条：
- *   link     —— 带派生分发密钥（?ft=），可安全发给别人 / 粘进客户端
+ *   link     —— 带派生分发密钥（?ft=），可安全发给别人 / 粘进客户端；
+ *               **不带 target = 通用订阅（v2ray base64 URI）**，可再解析、
+ *               可当转换输入；带 ?target=clash 等 = 该客户端的转换格式
  *   adminLink —— 带管理令牌，只在本机排障时用，不要外发
  *
  * 两种寻址方式：

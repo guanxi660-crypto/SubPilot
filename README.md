@@ -255,20 +255,6 @@ SUBPILOT_TOKEN=dev-local-token npm start
 > **改完前端要重启服务。** Worker 的 assets 清单在启动时快照，重新 build 后
 > 新 hash 的 JS 会 404（`index.html` 已指向新文件，表现为白屏 + 两个 404）。
 
-## 目录结构
-
-```
-apps/server/          Worker 后端
-  src/                index(路由/鉴权) api convert sce pipeline operators
-                      nodes feedkey ai sync telegram storage templates util
-  node/               自建适配层：server.mjs / sqlite-store.mjs / assets.mjs
-  wrangler.jsonc      生产配置
-apps/web/             Vue 3 + Vite + Tailwind + Naive UI
-  src/views components stores utils
-Dockerfile docker-compose.yml .env.example
-LICENSE (AGPL-3.0-only)  NOTICE
-```
-
 ## 许可
 
 AGPL-3.0-only，见 [LICENSE](LICENSE)。第三方组件与出处见 [NOTICE](NOTICE)。

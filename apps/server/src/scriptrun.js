@@ -12,18 +12,39 @@
 // 执行方式：用 evalCode 把用户脚本 + nodes 数据 + regionOf/flagOf 映射表
 // 合成一段代码，QuickJS 通过 JSON 序列化返回结果，无需手动管理 handle。
 
-import { newQuickJSWASMModuleFromVariant, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
+import { newQuickJSWASMModuleFromVariant, newVariant, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
+import RELEASE_SYNC from '@jitl/quickjs-wasmfile-release-sync';
 import { renameNode, REGIONS } from './nodes.js';
 
 const SCRIPT_TIMEOUT_MS = 3000;
 const SCRIPT_MAX_CODE_LEN = 20000;
 
 let quickjsModule = null;
+let wasmModulePromise = null;
+
+async function getWasmModule() {
+    if (!wasmModulePromise) {
+        wasmModulePromise = (async () => {
+            try {
+                const mod = await import('./quickjs.wasm');
+                return mod.default;
+            } catch {
+                const fs = await import('node:fs');
+                const { fileURLToPath } = await import('node:url');
+                const wasmPath = fileURLToPath(new URL('./quickjs.wasm', import.meta.url));
+                const wasmBuffer = fs.readFileSync(wasmPath);
+                return await WebAssembly.compile(wasmBuffer);
+            }
+        })();
+    }
+    return wasmModulePromise;
+}
 
 async function getModule() {
     if (!quickjsModule) {
-        const variant = await import('@jitl/quickjs-singlefile-browser-release-sync');
-        quickjsModule = await newQuickJSWASMModuleFromVariant(variant.default);
+        const wasmModule = await getWasmModule();
+        const variant = newVariant(RELEASE_SYNC, { wasmModule });
+        quickjsModule = await newQuickJSWASMModuleFromVariant(variant);
     }
     return quickjsModule;
 }

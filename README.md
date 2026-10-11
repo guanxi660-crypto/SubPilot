@@ -26,11 +26,9 @@ SubPilot 服务端 ────────────────────�
         /download/*、/share/*   客户端直接拉取（只读分发密钥）
 ```
 
-[本项目默认后端版本](https://subpilot.57995799.xyz/version)
+[本项目默认后端版本](https://subpilot.57995799.xyz/version) · 基于 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended)
 
-基于 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended)
-
-该实例由作者自建、**公益免费提供**，`SUB_BACKEND` 已预置此地址，开箱即用；
+该后端实例由作者自建、**公益免费提供**，`SUB_BACKEND` 已预置此地址，开箱即用；
 不承诺可用性与稳定性，请勿滥用，有稳定性要求请换自建后端。
 
 **出处引用**：算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；
@@ -191,7 +189,7 @@ SUBPILOT_TOKEN='<你的令牌>' npm start
 
 ```bash
 npm run install:all
-npm run dev:server
+SUBPILOT_TOKEN=dev-local npm start
 npm run dev:web
 ```
 
@@ -200,11 +198,11 @@ npm run dev:web
 | 命令 | 作用 |
 | --- | --- |
 | `npm run install:all` | 安装前后端依赖（逐个包安装，不用 workspaces） |
-| `npm run dev:server` | 起后端（Node 形态，`node index.js`） |
+| `SUBPILOT_TOKEN=dev-local npm start` | 起后端（Node 形态，`node index.js`） |
 | `npm run dev:web` | 起前端 dev server |
 
-后端跑起来后打开 `http://127.0.0.1:8795`，令牌填 `dev-local-token`
-（该值来自 `apps/server/wrangler.dev.jsonc`）。前端 dev server 在
+后端跑起来后打开 `http://127.0.0.1:8795`，令牌填 `dev-local`
+（即上面 `SUBPILOT_TOKEN` 设的值）。前端 dev server 在
 `http://127.0.0.1:5175`，只改界面时用它更方便。
 
 ### 环境变量

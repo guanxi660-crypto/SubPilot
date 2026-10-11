@@ -26,11 +26,9 @@ SubPilot Worker ─────────────────────�
         /download/*、/share/*   客户端直接拉取（只读分发密钥）
 ```
 
-[本项目默认后端版本](https://subpilot.57995799.xyz/version)
+[本项目默认后端版本](https://subpilot.57995799.xyz/version) · 基于 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended)
 
-基于 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended)
-
-该实例由作者自建、**公益免费提供**，`SUB_BACKEND` 已预置此地址，开箱即用；
+该后端实例由作者自建、**公益免费提供**，`SUB_BACKEND` 已预置此地址，开箱即用；
 不承诺可用性与稳定性，请勿滥用，有稳定性要求请换自建后端。
 
 **出处引用**：算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；

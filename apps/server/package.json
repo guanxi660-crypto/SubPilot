@@ -1,19 +1,17 @@
 {
     "name": "@subpilot/server",
-    "version": "0.1.15",
+    "version": "0.1.16",
     "private": true,
     "license": "AGPL-3.0-only",
     "type": "module",
-    "engines": {
-        "node": ">=22.5"
-    },
     "scripts": {
         "dev": "wrangler dev -c wrangler.dev.jsonc --port 8795 --persist-to=.wrangler/state",
         "deploy": "wrangler deploy -c wrangler.jsonc",
-        "tail": "wrangler tail -c wrangler.jsonc",
-        "start": "node --disable-warning=ExperimentalWarning node/server.mjs"
+        "tail": "wrangler tail -c wrangler.jsonc"
     },
     "dependencies": {
+        "@jitl/quickjs-singlefile-browser-release-sync": "^0.32.0",
+        "quickjs-emscripten": "^0.32.0",
         "yaml": "^2.6.1"
     },
     "devDependencies": {

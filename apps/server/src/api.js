@@ -16,6 +16,7 @@ import { runPipeline, previewText, fetchSubText } from './pipeline.js';
 import { buildLinks, resolveSourceRefs, adhocSpec, publicBase, convertedBackendLink } from './convert.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
 import { handleTemplates, sanitizeProcess } from './templates.js';
+import { isScriptSupported } from './scriptrun.js';
 
 import serverPkg from '../package.json' with { type: 'json' };
 
@@ -105,6 +106,7 @@ export function publicSettings(settings) {
         model: ai.model || '',
         hasApiKey: !!ai.apiKey,
         apiKeyMask: maskSecret(ai.apiKey),
+        allowScript: ai.allowScript !== false,
     };
     const sync = s.sync || {};
     s.sync = {
@@ -182,6 +184,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
             presets: PROCESS_PRESETS,
             templates: snap.templates,
             targets: SCE_TARGETS,
+            scriptSupported: isScriptSupported(),
         });
     }
 
@@ -489,7 +492,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 for (const u of urls) chunks.push(await fetchSubText(u, sub.ua, env));
                 text = chunks.join('\n');
             }
-            const r = previewText(text, sub.process);
+            const r = await previewText(text, sub.process);
             return ok({ format: r.format, processed: r.summary, log: r.log, total: r.summary.length });
         } catch (e) {
             return fail(e.message, e.status || 400);
@@ -497,13 +500,12 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
     }
 
     if (seg[0] === 'preview' && seg[1] === 'process' && method === 'POST') {
-        
         const process = Array.isArray(body.process) ? body.process : [];
         try {
             let text = String(body.content || '');
             if (!text && body.url) text = await fetchSubText(String(body.url), String(body.ua || ''), env);
             if (!text) return fail('请提供订阅内容或地址', 400);
-            const r = previewText(text, process);
+            const r = await previewText(text, process);
             return ok({ format: r.format, processed: r.summary, log: r.log, total: r.summary.length });
         } catch (e) {
             return fail(e.message, e.status || 400);
@@ -698,6 +700,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 if (isPlainObject(inc.ai)) {
                     if (typeof inc.ai.baseUrl === 'string') cur.ai.baseUrl = inc.ai.baseUrl.trim();
                     if (typeof inc.ai.model === 'string') cur.ai.model = inc.ai.model.trim();
+                    if (typeof inc.ai.allowScript === 'boolean') cur.ai.allowScript = inc.ai.allowScript;
                     cur.ai.apiKey = mergeSecret(inc.ai.apiKey, cur.ai.apiKey);
                 }
                 if (isPlainObject(inc.sync)) {

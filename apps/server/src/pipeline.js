@@ -112,7 +112,7 @@ export async function runPipeline(env, snap, { sources = [], process = [] } = {}
         let nodes = parsed.nodes;
         const own = Array.isArray(item.process) ? item.process : [];
         if (own.length) {
-            const r = applyOperators(nodes, own);
+            const r = await applyOperators(nodes, own);
             nodes = r.nodes;
             for (const l of r.log) log.push(`[${src.name}] ${l}`);
         }
@@ -125,7 +125,7 @@ export async function runPipeline(env, snap, { sources = [], process = [] } = {}
     
     let nodes = collected;
     if (Array.isArray(process) && process.length) {
-        const r = applyOperators(nodes, process);
+        const r = await applyOperators(nodes, process);
         nodes = r.nodes;
         for (const l of r.log) log.push(`[组合层] ${l}`);
     }
@@ -154,10 +154,10 @@ function dedupeSafe(nodes) {
 }
 
 
-export function previewText(text, process = []) {
+export async function previewText(text, process = []) {
     const parsed = parseNodes(text);
     if (parsed.error) return { format: parsed.format, nodes: [], log: [parsed.error], summary: [] };
-    const r = applyOperators(parsed.nodes, process);
+    const r = await applyOperators(parsed.nodes, process);
     return {
         format: parsed.format,
         nodes: r.nodes,

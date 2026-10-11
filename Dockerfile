@@ -5,7 +5,7 @@
 # 两段构建：第一段装前端依赖并 vite build，第二段只装**运行时**依赖
 # （apps/server 的 dependencies 只有一个 yaml），最终镜像里没有构建工具链。
 #
-# 运行时跑的是 apps/server/node/server.mjs —— 直接调用 src/router.js 的
+# 运行时跑的是 apps/server/node/server.js —— 直接调用 src/router.js 的
 # 路由逻辑，配上 SQLite 存储（node:sqlite，Node 22.5+ 内置，
 # 不需要 better-sqlite3，因此 alpine 上不用装 python/make/g++）。
 #
@@ -30,7 +30,7 @@ FROM node:22-alpine AS runtime
 
 ENV NODE_ENV=production
 # 目录结构与仓库保持一致（/app/apps/server + /app/apps/web/dist），
-# 这样 server.mjs 里按相对位置推算的默认路径不用改也不会算错。
+# 这样 server.js 里按相对位置推算的默认路径不用改也不会算错。
 WORKDIR /app/apps/server
 
 COPY LICENSE NOTICE /app/
@@ -60,4 +60,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # --disable-warning=ExperimentalWarning：node:sqlite 在 22/24 上都会打一行
 # 「SQLite is an experimental feature」的实验性提示。API 本身稳定可用，但每行
 # 日志都带着它容易让人以为出了问题，这里静音。功能不受影响。
-CMD ["node", "--disable-warning=ExperimentalWarning", "node/server.mjs"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "node/server.js"]

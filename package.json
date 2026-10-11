@@ -12,7 +12,7 @@
         "install:all": "cd apps/server && npm install && cd ../web && npm install",
         "dev:web": "cd apps/web && npm run dev",
         "build": "cd apps/web && npm run build",
-        "start": "node --disable-warning=ExperimentalWarning apps/server/node/server.mjs",
+        "start": "node --disable-warning=ExperimentalWarning index.js",
         "docker:build": "docker build -t subpilot .",
         "docker:up": "docker compose up -d --build",
         "docker:down": "docker compose down"

@@ -1,1 +1,1 @@
-web: node --disable-warning=ExperimentalWarning apps/server/node/server.mjs
+web: node --disable-warning=ExperimentalWarning index.js

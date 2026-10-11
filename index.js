@@ -1,1 +1,1 @@
-import './apps/server/node/server.mjs';
+import './apps/server/node/server.js';

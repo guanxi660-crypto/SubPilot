@@ -7,8 +7,8 @@ import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:z
 import { createHash } from 'node:crypto';
 
 import { handleRequest, withSecurityHeaders } from '../src/router.js';
-import { createAssets } from './assets.mjs';
-import { createSqliteStore } from './sqlite-store.mjs';
+import { createAssets } from './assets.js';
+import { createSqliteStore } from './sqlite-store.js';
 
 if (!globalThis.crypto?.subtle) {
     const { webcrypto } = await import('node:crypto');

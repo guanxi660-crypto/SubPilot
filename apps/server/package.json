@@ -8,7 +8,7 @@
         "node": ">=22.5"
     },
     "scripts": {
-        "start": "node --disable-warning=ExperimentalWarning node/server.mjs"
+        "start": "node --disable-warning=ExperimentalWarning node/server.js"
     },
     "dependencies": {
         "yaml": "^2.6.1"

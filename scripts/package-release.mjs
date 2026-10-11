@@ -113,8 +113,15 @@ const zip = (dirName) => {
     const dst = join(OUT, `${dirName}.zip`);
     rmSync(dst, { force: true });
     try {
+        // Windows 上 PATH 里排前面的 tar 往往是 Git Bash 的 GNU tar —— 它把
+        // `D:\...` 当成远程主机（报 "Cannot connect to D: resolve failed"），
+        // 于是掉进下面的 Compress-Archive 兜底、打出 Linux 解压会摊平的坏包。
+        // 系统自带的 bsdtar 在 System32 下，-a 按扩展名出标准 zip（分隔符 /）。
+        // 有它就**显式**用它，不赌 PATH 顺序。
+        const winBsdtar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+        const tool = process.platform === 'win32' && existsSync(winBsdtar) ? winBsdtar : 'tar';
         // tar -a 按扩展名自动选格式（.zip → zip），分隔符是标准 `/`
-        execFileSync('tar', ['-a', '-c', '-f', dst, '-C', TMP, dirName], { stdio: 'inherit' });
+        execFileSync(tool, ['-a', '-c', '-f', dst, '-C', TMP, dirName], { stdio: 'inherit' });
     } catch {
         // 兜底：没有 tar（或它不支持 zip）时回到 PowerShell。
         // 注意这条路打出来的包在 Linux 上解压会摊平，仅作为应急。

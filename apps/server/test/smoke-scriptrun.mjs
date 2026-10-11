@@ -1,8 +1,4 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-globalThis.__SUBPILOT_VM__ = require('node:vm');
-
-const { runScript, auditScriptCode } = await import('../src/scriptrun.js');
+import { runScript, auditScriptCode, isScriptSupported } from '../src/scriptrun.js';
 
 const helpers = { regionOf: () => 'US', flagOf: () => '🇺🇸', log: () => {} };
 let pass = 0, fail = 0;
@@ -17,6 +13,11 @@ function test(name, fn) {
         fail++;
     }
 }
+
+console.log('Test 0: isScriptSupported');
+test('isScriptSupported 返回 true', () => {
+    if (!isScriptSupported()) throw new Error('应返回 true');
+});
 
 console.log('Test 1: 新构造节点（无 raw/obj）改名不应崩溃');
 test('新构造节点不崩溃', () => {

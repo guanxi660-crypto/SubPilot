@@ -1,0 +1,1 @@
+web: node --disable-warning=ExperimentalWarning apps/server/node/server.mjs

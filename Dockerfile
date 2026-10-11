@@ -1,17 +1,16 @@
 # syntax=docker/dockerfile:1
 #
-# SubPilot —— Docker 镜像。
+# SubPilot —— Docker 镜像（Node / Docker 部署专用）。
 #
 # 两段构建：第一段装前端依赖并 vite build，第二段只装**运行时**依赖
-# （apps/server 的 dependencies 只有一个 yaml，wrangler 是 devDependency，被跳过），
-# 于是最终镜像里没有构建工具链，也没有 workerd 那套原生二进制。
+# （apps/server 的 dependencies 只有一个 yaml），最终镜像里没有构建工具链。
 #
-# 为什么不用 Cloudflare 官方的 wrangler/miniflare 镜像跑：
-#   那两者是开发期模拟器，官方不把它们当生产运行时。这个镜像跑的是
-#   apps/server/node/server.mjs —— 一段把 web 标准 Request/Response 接到
-#   node:http 上的适配层，配上 SQLite 存储（node:sqlite，Node 22.5+ 内置，
-#   不需要 better-sqlite3，因此 alpine 上不用装 python/make/g++）。
-#   见这两个文件顶部的说明。
+# 运行时跑的是 apps/server/node/server.mjs —— 直接调用 src/router.js 的
+# 路由逻辑，配上 SQLite 存储（node:sqlite，Node 22.5+ 内置，
+# 不需要 better-sqlite3，因此 alpine 上不用装 python/make/g++）。
+#
+# 多架构支持：node:22-alpine 同时提供 linux/amd64 和 linux/arm64 变体，
+# docker buildx build --platform linux/amd64,linux/arm64 即可出多架构镜像。
 
 # ---------- 构建前端 ----------
 FROM node:22-alpine AS web
@@ -37,10 +36,7 @@ WORKDIR /app/apps/server
 COPY LICENSE NOTICE /app/
 
 COPY apps/server/package.json apps/server/package-lock.json ./
-# --omit=dev：wrangler 是 devDependency，生产镜像不需要（连 workerd 一起省掉）。
-# --omit=optional：optionalDependencies 里那个 @cloudflare/workerd-windows-64
-#   是给 Windows 上的本地开发用的，Linux 镜像里装了也用不上。
-RUN npm ci --omit=dev --omit=optional && npm cache clean --force
+RUN npm ci && npm cache clean --force
 
 COPY apps/server/src ./src
 COPY apps/server/node ./node

@@ -8,7 +8,7 @@
 # 依赖与构建产物
 **/node_modules
 apps/web/dist
-apps/server/.wrangler
+
 apps/server/data
 
 # 本地 Node 部署时的数据目录（挂卷用，绝不该进镜像）

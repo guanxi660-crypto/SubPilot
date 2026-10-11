@@ -342,7 +342,7 @@
                 <li>订阅（含 JSON 脚本链）、组合、文件正文、转换后成品快照</li>
                 <li>自定义算子模板</li>
                 <li>
-                    <span class="text-sky-300/90">设置</span>（转换后端地址、公开地址、默认目标格式与外部配置、
+                    <span class="text-sky-300/90">设置</span>（转换后端地址、公开地址与外部配置、
                     AI Base URL / 模型、TG 推送目标与自动推送开关）
                 </li>
                 <li><span class="text-amber-300/90">不包含</span>访问令牌、AI Key、Gist Token、网盘密码、TG Bot Token 等凭据 —— 避免备份文件变成凭据泄漏渠道</li>

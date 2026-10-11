@@ -693,7 +693,6 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                 const inc = isPlainObject(body) ? body : {};
                 if (typeof inc.subBackend === 'string') cur.subBackend = inc.subBackend.trim();
                 if (typeof inc.publicBaseUrl === 'string') cur.publicBaseUrl = inc.publicBaseUrl.trim();
-                if (typeof inc.defaultTarget === 'string' && inc.defaultTarget) cur.defaultTarget = inc.defaultTarget;
                 if (typeof inc.defaultConfig === 'string') cur.defaultConfig = inc.defaultConfig.trim();
 
                 if (isPlainObject(inc.ai)) {
@@ -759,7 +758,6 @@ export function exportableSettings(settings) {
     return {
         subBackend: String(s.subBackend || ''),
         publicBaseUrl: String(s.publicBaseUrl || ''),
-        defaultTarget: String(s.defaultTarget || ''),
         defaultConfig: String(s.defaultConfig || ''),
         ai: { baseUrl: String(ai.baseUrl || ''), model: String(ai.model || '') },
         sync: {
@@ -807,11 +805,6 @@ function mergeSettings(cur, inc, stats) {
             n += 1;
         }
     }
-    if (typeof inc.defaultTarget === 'string' && inc.defaultTarget) {
-        cur.defaultTarget = inc.defaultTarget;
-        n += 1;
-    }
-
     if (isPlainObject(inc.ai)) {
         for (const k of ['baseUrl', 'model']) {
             if (typeof inc.ai[k] === 'string') {

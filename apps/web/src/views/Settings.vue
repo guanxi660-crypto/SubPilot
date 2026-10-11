@@ -192,7 +192,7 @@
                     长期使用或对稳定性有要求，建议在「转换」页换成自建后端。
                 </div>
                 <div>前端与交互参考 SubPilot-Archive 的设计体系。</div>
-                <div>转换后端地址、默认目标格式等已移至「转换」页配置。</div>
+                <div>转换后端地址等已移至「转换」页配置。</div>
             </div>
             <div class="flex items-center gap-3 mt-4 pt-4 border-t border-line">
                 <div class="text-[11px] text-slate-600 font-mono">
@@ -296,7 +296,7 @@ async function save() {
         const res = await api('/api/settings', {
             method: 'POST',
             // 只提交本页负责的字段。后端是**部分更新**：未提供的字段保持原值，
-            // 所以这里不能带上 subBackend / defaultTarget —— 它们已移到「转换」页，
+            // 所以这里不能带上 subBackend —— 它已移到「转换」页，
             // 若跟着提交空值会把那边的设置清掉。
             body: JSON.stringify({
                 publicBaseUrl: cfg.publicBaseUrl,

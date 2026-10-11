@@ -100,29 +100,18 @@
                     >诊断台 ↗</a>
                 </div>
 
-                <div class="grid sm:grid-cols-2 gap-4 mt-4">
-                    <div>
-                        <label class="text-xs text-slate-500">转换后端地址</label>
-                        <input
-                            v-model="srv.subBackend"
-                            class="input mt-1.5 font-mono !text-xs"
-                            :placeholder="srv.envBackend || 'https://api.asailor.org'"
-                        />
-                        <div class="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                            留空则使用部署时配置的转换后端。
-                            兼容 SubConverter 与 SubConverter-Extended 后端，建议使用自建后端。
-                            转换后端主要为 mihomo 系列客户端转换分流远程订阅使用，其它客户端的基础功能已经够用；
-                            转换后端为开源项目，部分客户端没有实测，请自行测试。
-                        </div>
-                    </div>
-                    <div>
-                        <label class="text-xs text-slate-500">默认目标格式</label>
-                        <select v-model="srv.defaultTarget" class="input mt-1.5">
-                            <optgroup v-for="g in targetGroups" :key="g.name" :label="g.name">
-                                <option v-for="t in g.items" :key="t.value" :value="t.value">{{ t.label }}</option>
-                            </optgroup>
-                        </select>
-                        <div class="text-[11px] text-slate-600 mt-1">进入本页时「目标格式」的初值。</div>
+                <div class="mt-4">
+                    <label class="text-xs text-slate-500">转换后端地址</label>
+                    <input
+                        v-model="srv.subBackend"
+                        class="input mt-1.5 font-mono !text-xs"
+                        :placeholder="srv.envBackend || 'https://api.asailor.org'"
+                    />
+                    <div class="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        留空则使用部署时配置的转换后端。
+                        兼容 SubConverter 与 SubConverter-Extended 后端，建议使用自建后端。
+                        转换后端主要为 mihomo 系列客户端转换分流远程订阅使用，其它客户端的基础功能已经够用；
+                        转换后端为开源项目，部分客户端没有实测，请自行测试。
                     </div>
                 </div>
 
@@ -224,7 +213,7 @@
                 <div class="ml-auto flex gap-2">
                     <button class="btn-ghost !py-1 text-xs" :disabled="!canCopyLink" @click="copyResultLink">⧉ 复制链接</button>
                     <button class="btn-ghost !py-1 text-xs" :disabled="!result.body" @click="downloadBody">⤓ 下载</button>
-                    <button class="btn-ghost !py-1 text-xs" :disabled="!result.body" @click="openSave">保存成品</button>
+                    <button class="btn-ghost !py-1 text-xs" :disabled="!result.body" @click="openSave">保存快照</button>
                 </div>
             </div>
 
@@ -232,7 +221,7 @@
                  （<转换后端>/sub?target=…&url=…&config=…）。后端是哪台就用哪台 ——
                  部署默认的或设置里自定义的那台，不重写成 SubPilot 自己的形态。
                  点「转换」后才有（它只依赖参数，所以转换失败时也照样给）。
-                 「保存成品」会把这条**原样**存进成品 —— 之后成品卡片复制 / TG 推送
+                 「保存快照」会把这条**原样**存进快照 —— 之后快照卡片复制 / TG 推送
                  用的就是它，三处逐字一致（活链，内容跟随订阅更新）。 -->
             <div v-if="result.backendUrl" class="mt-3 bg-panel2 rounded-xl p-3">
                 <div class="text-[11px] text-accent2">
@@ -262,11 +251,11 @@
             </div>
         </div>
 
-        <!-- 成品：保存过的快照列表。以前保存成功后界面上毫无踪迹，
+        <!-- 快照：保存过的转换产物列表。以前保存成功后界面上毫无踪迹，
              概览的「全部 ›」又跳回本页 —— 而本页偏偏没有列表，这就是「保存了却没见新卡片」的根因 -->
         <div class="card p-5 mt-4 fade-up" style="--d:200ms">
             <div class="flex items-center gap-3 flex-wrap">
-                <div class="text-sm font-semibold">成品</div>
+                <div class="text-sm font-semibold">快照</div>
                 <span class="text-[10px] px-2 py-0.5 rounded-full border border-line text-slate-400">
                     固定分享链接 · 重存即更新内容
                 </span>
@@ -294,8 +283,8 @@
                         {{ fmtSize(c.size) }} · 保存于 {{ fmtTime(c.updatedAt || c.createdAt) }}
                     </div>
 
-                    <!-- 分享链接做成按钮（与订阅卡片操作行对齐）：保存成品那一刻后端就建好了，
-                         之后重转 / 重存都不会变 —— 点一次生成一次的语义对成品是错的，
+                    <!-- 分享链接做成按钮（与订阅卡片操作行对齐）：保存快照那一刻后端就建好了，
+                         之后重转 / 重存都不会变 —— 点一次生成一次的语义对快照是错的，
                          客户端配置里嵌的地址一换，所有人都得重新分发。 -->
                     <div class="flex items-center gap-1.5 mt-2.5 flex-wrap">
                         <TgPushButton compact kind="converted" :name="c.name" :label="c.name" />
@@ -314,21 +303,21 @@
                 </div>
             </div>
             <div v-else class="text-xs text-slate-600 mt-3">
-                还没有成品。转换成功后点上方「保存成品」，这里会出现带固定分享链接的卡片，
+                还没有快照。转换成功后点上方「保存快照」，这里会出现带固定分享链接的卡片，
                 也能推到 Telegram。
             </div>
         </div>
 
-        <!-- 保存成品 -->
+        <!-- 保存快照 -->
         <div
             v-if="save.open"
             class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center overflow-y-auto py-16 px-4"
             @click.self="save.open = false"
         >
             <div class="card w-full max-w-lg p-6">
-                <div class="font-semibold">保存成品</div>
+                <div class="font-semibold">保存快照</div>
                 <div class="text-xs text-slate-500 mt-2 leading-relaxed">
-                    成品保存的是<strong>转换产物</strong>：分享链接固定不变，
+                    快照保存的是<strong>转换产物</strong>：分享链接固定不变，
                     重新保存会更新内容（链接地址不变，客户端无需重新导入）。
                     要换格式请回到本页改 target 重转；不能再被当作转换输入。
                 </div>
@@ -415,15 +404,14 @@ const feedUrl = ref('');
  */
 const canCopyLink = computed(() => !!(result.backendUrl || result.body));
 
-// 已保存的成品列表 —— 保存动作必须能在这页看到结果，而不是只在概览里默默出现
+// 已保存的快照列表 —— 保存动作必须能在这页看到结果，而不是只在概览里默默出现
 const cards = reactive({ items: [], loading: false, downloading: '', deleting: '' });
-/** 「复制」按钮的瞬时反馈：记录刚复制成功的成品名，1.5s 后还原 */
+/** 「复制」按钮的瞬时反馈：记录刚复制成功的快照名，1.5s 后还原 */
 const copied = ref('');
 
 // 转换后端配置 —— 并入上方主卡片：转换时最常需要切后端 / 换目标格式。
 const srv = reactive({
     subBackend: '',
-    defaultTarget: 'clash',
     envBackend: '',
     effectiveBackend: '',
     online: false,
@@ -589,7 +577,6 @@ async function loadServer() {
         const res = await api('/api/settings');
         const d = res.data || {};
         srv.subBackend = d.subBackend || '';
-        srv.defaultTarget = d.defaultTarget || 'clash';
         srv.envBackend = d.envBackend || '';
         srv.effectiveBackend = d.effectiveBackend || '';
     } catch (e) {
@@ -625,7 +612,6 @@ async function saveServer() {
             method: 'POST',
             body: JSON.stringify({
                 subBackend: srv.subBackend,
-                defaultTarget: srv.defaultTarget,
             }),
         });
         message.success('已保存');
@@ -637,7 +623,7 @@ async function saveServer() {
     }
 }
 
-// ---- 成品列表 ----
+// ---- 快照列表 ----
 
 async function loadCards() {
     cards.loading = true;
@@ -669,7 +655,7 @@ async function downloadCard(c) {
 }
 
 /**
- * 成品的固定分享链接（/share/converted/…?code=）—— 快照直链。
+ * 快照的固定分享链接（/share/converted/…?code=）—— 快照直链。
  * 仅在后端没下发 `link` 时兜底（老数据 / 后端地址缺失）。
  */
 function convertedShareUrl(c) {
@@ -677,12 +663,12 @@ function convertedShareUrl(c) {
 }
 
 /**
- * 成品卡片上「⧉ 分享链接」复制的那条地址。
+ * 快照卡片上「⧉ 分享链接」复制的那条地址。
  *
  * 后端下发的 `link` 是**成品链接**（活链 —— 保存时把产出面板那条后端地址
  * 原样存了下来，`<后端>/sub?target=…&url=<本站 /feed 活链>&config=…`）。
  * 它与推给 TG 的那条由后端同一个函数产出，所以卡片上复制的和推出去的是
- * 同一条地址。老成品（没存活链）退回快照链，再不行才是快照直链。
+ * 同一条地址。老快照（没存活链）退回快照链，再不行才是快照直链。
  */
 function convertedLink(c) {
     return c.link || convertedShareUrl(c);
@@ -701,12 +687,12 @@ async function copyCard(c) {
 }
 
 async function delCard(c) {
-    if (!window.confirm(`删除成品「${c.name}」？此操作不可恢复，它的固定分享链接也会一并失效。`)) return;
+    if (!window.confirm(`删除快照「${c.name}」？此操作不可恢复，它的固定分享链接也会一并失效。`)) return;
     cards.deleting = c.name;
     try {
         const res = await api(`/api/converted/${encodeURIComponent(c.name)}`, { method: 'DELETE' });
         cards.items = res.data || [];
-        message.success('成品已删除');
+        message.success('快照已删除');
     } catch (e) {
         message.error(e.message);
     } finally {
@@ -791,7 +777,7 @@ async function run() {
  * 「复制链接」：优先复制**成品链接** —— 转换后端格式的那条地址
  * （`<转换后端>/sub?target=…&url=…&config=…`，后端是哪台就是哪台）。
  * 它是这次转换真正打出去的地址，粘进客户端或浏览器都能复现同一次转换；
- * 「保存成品」时它会被原样存进成品，成为卡片复制 / TG 推送用的那条。
+ * 「保存快照」时它会被原样存进快照，成为卡片复制 / TG 推送用的那条。
  *
  * 拿不到后端链接时（接口失败 / target=raw）退回订阅分发 feed（编辑后的订阅，
  * 带派生只读密钥、不转换）；连 feed 都没有的形态（来源全是外部地址）
@@ -845,7 +831,7 @@ async function doSave() {
         await api('/api/converted', {
             method: 'POST',
             // backendUrl = 产出面板那条成品链接（这次转换实际打到的后端地址），
-            // 原样存进成品 —— 之后卡片复制 / TG 推送用的就是它（活链，三处同源）。
+            // 原样存进快照 —— 之后卡片复制 / TG 推送用的就是它（活链，三处同源）。
             body: JSON.stringify({
                 name,
                 target: form.target,
@@ -854,9 +840,9 @@ async function doSave() {
                 backendUrl: result.backendUrl,
             }),
         });
-        message.success('成品已保存');
+        message.success('快照已保存');
         save.open = false;
-        // 立刻把新成品亮出来 —— 保存必须「看得见」，这是本轮修的 bug
+        // 立刻把新快照亮出来 —— 保存必须「看得见」，这是本轮修的 bug
         await loadCards();
     } catch (e) {
         message.error(e.message);
@@ -891,7 +877,7 @@ function applyQuery({ resetConfig = false } = {}) {
         ...colsQ.filter((n) => validCols.has(n)).map((n) => `col:${n}`),
     ];
     if (q.target) form.target = q.target;
-    else if (resetConfig) form.target = srv.defaultTarget || 'clash';
+    else if (resetConfig) form.target = 'clash';
     // 外部配置的初值 = **上次用过的那个地址**（自定义或预设），没记过才用内置默认。
     // 此前一律重置成内置默认，于是「记住这个地址」存下的自定义地址每次回来都被顶掉，
     // 用户得手动再挑一次 —— 存了等于没存。改地址照旧在「外部配置 / 模板」里选或填。

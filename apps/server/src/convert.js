@@ -237,7 +237,7 @@ async function prepareConversion(request, env, snap, params) {
     delete sceParams.ft;
 
     
-    if (!sceParams.target) sceParams.target = snap.settings.defaultTarget || 'clash';
+    if (!sceParams.target) sceParams.target = 'clash';
     if (!sceParams.config && snap.settings.defaultConfig) sceParams.config = snap.settings.defaultConfig;
 
     if (local) {
@@ -411,10 +411,7 @@ export function convertedBackendLink({ env, snap, item, base, code }) {
         '';
     if (!c) return '';
     
-    const target =
-        item?.target && item.target !== 'raw'
-            ? item.target
-            : snap?.settings?.defaultTarget || 'clash';
+    const target = item?.target && item.target !== 'raw' ? item.target : 'clash';
     const params = {
         target,
         url: `${origin}/share/converted/${encodeURIComponent(name)}?code=${c}`,

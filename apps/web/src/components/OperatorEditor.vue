@@ -170,7 +170,11 @@
         <!-- 用自绘遮罩而不是 naive 的 NModal：全站弹窗风格都是这套 Tailwind 卡片，
              混进一个 naive 弹窗会在玻璃/亮色主题下露出不同的圆角和阴影。
              z-[60] 高于「模板管理」的 z-50 —— 它可以从管理面板里被唤起，
-             同层的话会因为 DOM 顺序被压在下面，看起来像"点了没反应"。 -->
+             同层的话会因为 DOM 顺序被压在下面，看起来像"点了没反应"。
+             ⚠️ 必须 Teleport 到 body：本组件嵌在 .card（backdrop-blur）里，
+             backdrop-filter 会把 fixed 后代的包含块劫持成那张卡片 ——
+             弹窗就"被限制"在编辑器里出不来了。 -->
+        <Teleport to="body">
         <div
             v-if="saveAs.open"
             class="fixed inset-0 z-[60] flex items-start justify-center bg-black/55 p-6 overflow-auto"
@@ -212,146 +216,172 @@
                 </div>
             </div>
         </div>
+        </Teleport>
 
-        <!-- ================= 模板管理 ================= -->
+        <!-- ================= 模板管理（大工作台） ================= -->
+        <!-- 以前是个 max-w-3xl 的小弹窗、编辑还要再开一层 —— 算子链 JSON 一行能拖很长，
+             小框里改起来要不停滚动。现在直接开一个大工作台：左侧列表、右侧整块编辑区，
+             选中即编辑，不再套第二层弹窗。
+             ⚠️ 必须 Teleport 到 body：backdrop-blur 的祖先卡片会把 fixed 后代困在卡片里
+             （实测弹窗只有 691×495，正是「被限制了」的根因）。 -->
+        <Teleport to="body">
         <div
             v-if="manager.open"
-            class="fixed inset-0 z-50 flex items-start justify-center bg-black/55 p-6 overflow-auto"
+            class="fixed inset-0 z-50 flex items-stretch justify-center bg-black/55 p-3 sm:p-6"
             @click.self="closeManager"
         >
-            <div class="card w-full max-w-3xl mt-10 p-5">
-                <div class="flex items-start gap-3">
+            <div class="card w-full max-w-[1500px] h-full max-h-[92vh] p-5 flex flex-col">
+                <div class="flex items-start gap-3 shrink-0">
                     <div>
                         <div class="text-sm font-semibold">模板管理</div>
                         <div class="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-                            自定义模板存在服务端，换设备也在；点「AI 编辑」可以让助手直接改它。
+                            自定义模板存在服务端，换设备也在；左侧选中后直接在右侧编辑，改完保存即时生效。
                         </div>
                     </div>
                     <button class="btn-ghost !py-1.5 text-xs ml-auto shrink-0" @click="closeManager">关闭</button>
                 </div>
 
-                <!-- 内置：只读，改不了（代码常量），但可以套用 -->
-                <div class="mt-5">
-                    <div class="text-xs font-medium text-slate-400">内置模板（只读）</div>
-                    <div class="mt-2 space-y-1.5">
-                        <div
-                            v-for="p in processPresets"
-                            :key="p.name"
-                            class="rounded-xl border border-line bg-panel2/40 px-3 py-2.5"
-                        >
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <span class="text-xs font-medium">{{ p.name }}</span>
-                                <span class="text-[11px] text-slate-500">{{ p.process.length }} 个算子</span>
+                <div class="flex-1 min-h-0 mt-4 grid gap-4 lg:grid-cols-[300px_1fr]">
+                    <!-- 左：模板列表 -->
+                    <div class="min-h-0 overflow-auto pr-1 space-y-4">
+                        <!-- 内置：只读，改不了（代码常量），但可以套用 -->
+                        <div>
+                            <div class="text-xs font-medium text-slate-400">内置模板（只读）</div>
+                            <div class="mt-2 space-y-1.5">
                                 <button
-                                    class="btn-ghost !py-1 text-[11px] ml-auto"
-                                    @click="applyTemplateProcess(p.process, p.name)"
-                                >套用</button>
+                                    v-for="p in processPresets"
+                                    :key="p.name"
+                                    class="w-full text-left rounded-xl border px-3 py-2 transition"
+                                    :class="manager.selKind === 'builtin' && manager.selName === p.name
+                                        ? 'border-accent/60 bg-accent/15'
+                                        : 'border-line bg-panel2/40 hover:border-accent/40'"
+                                    @click="selectBuiltin(p)"
+                                >
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-xs font-medium truncate">{{ p.name }}</span>
+                                        <span class="text-[11px] text-slate-500 ml-auto shrink-0">{{ p.process.length }} 个算子</span>
+                                    </div>
+                                    <div class="text-[11px] text-slate-500 mt-0.5">{{ p.desc }}</div>
+                                </button>
                             </div>
-                            <div class="text-[11px] text-slate-500 mt-1">{{ p.desc }}</div>
+                        </div>
+
+                        <!-- 自定义：可选中编辑 / 套用 / 交给 AI / 删除 -->
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <div class="text-xs font-medium text-slate-400">自定义模板（{{ customTemplates.length }}）</div>
+                                <button
+                                    class="btn-ghost !py-1 !px-2 !text-[11px] ml-auto"
+                                    :disabled="!list.length"
+                                    :title="list.length ? '用编辑器里当前的算子链新建一个模板' : '编辑器里还没有算子'"
+                                    @click="startNew"
+                                >＋ 新建</button>
+                            </div>
+                            <div
+                                v-if="!customTemplates.length"
+                                class="mt-2 rounded-xl border border-dashed border-line px-3 py-6 text-center text-[11px] text-slate-500"
+                            >
+                                还没有自定义模板。在编辑器里调好算子链，点工具栏的「☆ 存为模板」就能存下来。
+                            </div>
+                            <div v-else class="mt-2 space-y-1.5">
+                                <button
+                                    v-for="t in customTemplates"
+                                    :key="t.name"
+                                    class="w-full text-left rounded-xl border px-3 py-2 transition"
+                                    :class="manager.selKind === 'custom' && manager.selName === t.name
+                                        ? 'border-accent/60 bg-accent/15'
+                                        : 'border-line bg-panel2/40 hover:border-accent/40'"
+                                    @click="selectCustom(t)"
+                                >
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-xs font-medium truncate">{{ t.name }}</span>
+                                        <span class="text-[11px] text-slate-500 ml-auto shrink-0">{{ t.process.length }} 个算子</span>
+                                    </div>
+                                    <div v-if="t.desc" class="text-[11px] text-slate-500 mt-0.5">{{ t.desc }}</div>
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- 自定义：可套用 / 改名 / 改 JSON / 交给 AI / 删除 -->
-                <div class="mt-5">
-                    <div class="flex items-center gap-2 flex-wrap">
-                        <div class="text-xs font-medium text-slate-400">
-                            自定义模板（{{ customTemplates.length }}）
-                        </div>
-                        <button
-                            class="btn-ghost !py-1 text-[11px] ml-auto"
-                            :disabled="!list.length"
-                            :title="list.length ? '把编辑器里当前的算子链存成新模板' : '编辑器里还没有算子'"
-                            @click="openSaveAsFromManager"
-                        >＋ 用当前算子链新建</button>
-                    </div>
-
-                    <div
-                        v-if="!customTemplates.length"
-                        class="mt-2 rounded-xl border border-dashed border-line px-3 py-6 text-center text-[11px] text-slate-500"
-                    >
-                        还没有自定义模板。在编辑器里调好算子链，点工具栏的「☆ 存为模板」就能存下来。
-                    </div>
-
-                    <div v-else class="mt-2 space-y-1.5">
-                        <div
-                            v-for="t in customTemplates"
-                            :key="t.name"
-                            class="rounded-xl border border-line bg-panel2/40 px-3 py-2.5"
-                        >
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <span class="text-xs font-medium">{{ t.name }}</span>
-                                <span class="text-[11px] text-slate-500">{{ t.process.length }} 个算子</span>
-                                <div class="ml-auto flex items-center gap-1.5 shrink-0">
-                                    <button class="btn-ghost !py-1 text-[11px]" @click="applyTemplateProcess(t.process, t.name)">套用</button>
-                                    <button class="btn-ghost !py-1 text-[11px]" @click="openEdit(t)">编辑</button>
+                    <!-- 右：编辑区（大） -->
+                    <div class="min-h-0 flex flex-col rounded-xl border border-line bg-panel2/20 p-3">
+                        <template v-if="manager.selKind">
+                            <div class="shrink-0 flex items-center gap-2 flex-wrap">
+                                <div class="text-xs font-semibold">
+                                    {{ manager.selKind === 'new'
+                                        ? '新建模板'
+                                        : manager.selKind === 'builtin'
+                                            ? `内置模板「${manager.selName}」`
+                                            : `编辑模板「${manager.selName}」` }}
+                                </div>
+                                <span
+                                    v-if="manager.selKind === 'builtin'"
+                                    class="text-[10px] px-2 py-0.5 rounded-full border border-line text-slate-400"
+                                >只读 · 可套用</span>
+                                <div class="ml-auto flex gap-1.5">
+                                    <button class="btn-ghost !py-1 text-[11px]" @click="applySelected">套用</button>
                                     <button
+                                        v-if="manager.selKind === 'custom'"
                                         class="btn-ghost !py-1 text-[11px]"
                                         title="跳到 AI 助手，让它帮你改这个模板"
-                                        @click="editWithAi(t)"
+                                        @click="editWithAiSelected"
                                     >AI 编辑</button>
-                                    <button class="btn-ghost !py-1 text-[11px] !text-rose-300/80" @click="askDelete(t)">删除</button>
+                                    <button
+                                        v-if="manager.selKind === 'custom'"
+                                        class="btn-ghost !py-1 text-[11px] !text-rose-300/80"
+                                        @click="askDeleteSelected"
+                                    >删除</button>
                                 </div>
                             </div>
-                            <div v-if="t.desc" class="text-[11px] text-slate-500 mt-1">{{ t.desc }}</div>
+
+                            <div class="shrink-0 grid sm:grid-cols-2 gap-3 mt-3">
+                                <label class="block">
+                                    <span class="text-[11px] text-slate-400">名称（1–40 字符，不能与内置模板重名）</span>
+                                    <input
+                                        v-model="manager.draft.name"
+                                        class="input mt-1 !py-1.5 text-sm"
+                                        maxlength="40"
+                                        :disabled="manager.selKind === 'builtin'"
+                                    />
+                                </label>
+                                <label class="block">
+                                    <span class="text-[11px] text-slate-400">说明（可选，会显示在套用菜单里）</span>
+                                    <input
+                                        v-model="manager.draft.desc"
+                                        class="input mt-1 !py-1.5 text-sm"
+                                        maxlength="200"
+                                        :disabled="manager.selKind === 'builtin'"
+                                    />
+                                </label>
+                            </div>
+
+                            <JsonEditor
+                                fill
+                                class="flex-1 min-h-0 mt-3"
+                                :model-value="manager.draft.processText"
+                                label="算子链（JSON 数组）"
+                                validate="json"
+                                :readonly="manager.selKind === 'builtin'"
+                                @update:model-value="(v) => (manager.draft.processText = v)"
+                            />
+
+                            <div v-if="manager.selKind !== 'builtin'" class="shrink-0 flex justify-end gap-2 mt-3">
+                                <button
+                                    class="btn-primary !py-1.5 text-xs"
+                                    :disabled="manager.saving || !manager.draft.name.trim()"
+                                    @click="saveDraft"
+                                >{{ manager.saving ? '保存中…' : manager.selKind === 'new' ? '保存模板' : '保存修改' }}</button>
+                            </div>
+                        </template>
+
+                        <div v-else class="flex-1 flex items-center justify-center text-[11px] text-slate-500">
+                            从左侧选一个模板开始编辑，或点「＋ 新建」。
                         </div>
                     </div>
                 </div>
             </div>
         </div>
-
-        <!-- ================= 编辑模板（大编辑框） ================= -->
-        <!-- 编辑是这件弹窗里唯一需要空间的动作：算子链 JSON 一行能拖很长，
-             塞在管理面板的卡片里只有 8 行高，改起来要不停滚动。
-             所以单独开一个宽弹窗，编辑区给足行数。
-             z-[60] 与「存为模板」同层 —— 两者都盖在管理面板（z-50）上。 -->
-        <div
-            v-if="editor.open"
-            class="fixed inset-0 z-[60] flex items-start justify-center bg-black/55 p-6 overflow-auto"
-            @click.self="closeEditor"
-        >
-            <div class="card w-full max-w-5xl mt-8 p-5">
-                <div class="flex items-start gap-3">
-                    <div>
-                        <div class="text-sm font-semibold">编辑模板「{{ editor.original }}」</div>
-                        <div class="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-                            算子从上到下依次执行；改完保存会立即对「⚡ 套用模板」生效。
-                        </div>
-                    </div>
-                    <button class="btn-ghost !py-1.5 text-xs ml-auto shrink-0" @click="closeEditor">关闭</button>
-                </div>
-
-                <div class="grid sm:grid-cols-2 gap-3 mt-4">
-                    <label class="block">
-                        <span class="text-[11px] text-slate-400">名称（1–40 字符，不能与内置模板重名）</span>
-                        <input v-model="editor.draft.name" class="input mt-1 !py-1.5 text-sm" maxlength="40" />
-                    </label>
-                    <label class="block">
-                        <span class="text-[11px] text-slate-400">说明（可选，会显示在套用菜单里）</span>
-                        <input v-model="editor.draft.desc" class="input mt-1 !py-1.5 text-sm" maxlength="200" />
-                    </label>
-                </div>
-
-                <div class="mt-3">
-                    <JsonEditor
-                        :model-value="editor.draft.processText"
-                        label="算子链（JSON 数组）"
-                        :rows="20"
-                        validate="json"
-                        @update:model-value="(v) => (editor.draft.processText = v)"
-                    />
-                </div>
-
-                <div class="flex justify-end gap-2 mt-4">
-                    <button class="btn-ghost !py-1.5 text-xs" @click="closeEditor">取消</button>
-                    <button
-                        class="btn-primary !py-1.5 text-xs"
-                        :disabled="editor.saving || !editor.draft.name.trim()"
-                        @click="saveEdit"
-                    >{{ editor.saving ? '保存中…' : '保存修改' }}</button>
-                </div>
-            </div>
-        </div>
+        </Teleport>
     </div>
 </template>
 
@@ -402,16 +432,12 @@ const list = computed(() => (Array.isArray(props.modelValue) ? props.modelValue 
 // ---- 存为模板 ----
 const saveAs = reactive({ open: false, name: '', desc: '', saving: false });
 
-// ---- 模板管理 ----
+// ---- 模板管理（大工作台）----
+// 选中即编辑：selKind = 'builtin'（只读）/ 'custom'（改现有）/ 'new'（新建）。
 const manager = reactive({
     open: false,
-});
-
-// 编辑模板用独立的大弹窗（editor），不在管理面板里就地展开 ——
-// 算子链 JSON 一行能拖很长，卡片里 8 行高的编辑区改起来要不停滚动。
-const editor = reactive({
-    open: false,
-    original: '', // 被编辑的模板原名（改名要走 PATCH /api/template/:name）
+    selKind: '',
+    selName: '',
     saving: false,
     draft: { name: '', desc: '', processText: '[]' },
 });
@@ -516,7 +542,7 @@ function applyTemplateProcess(process, label) {
 /** 下拉里选中：模板项套用，「管理」项开面板 */
 function onTemplateSelect(key) {
     if (key === '__manage') {
-        manager.open = true;
+        openManager();
         return;
     }
     const [kind, ...rest] = String(key).split(':');
@@ -533,10 +559,6 @@ function openSaveAs() {
     saveAs.name = '';
     saveAs.desc = '';
     saveAs.open = true;
-}
-
-function openSaveAsFromManager() {
-    openSaveAs();
 }
 
 async function confirmSaveAs() {
@@ -558,66 +580,96 @@ async function confirmSaveAs() {
     }
 }
 
-// ---- 模板管理 ----
+// ---- 模板管理（大工作台）----
+
+function openManager() {
+    manager.open = true;
+    if (customTemplates.value.length) selectCustom(customTemplates.value[0]);
+    else if (processPresets.value.length) selectBuiltin(processPresets.value[0]);
+    else manager.selKind = '';
+}
 
 function closeManager() {
     manager.open = false;
-    closeEditor();
 }
 
-// ---- 编辑模板（大弹窗）----
-
-function openEdit(t) {
-    editor.original = t.name;
-    editor.draft.name = t.name;
-    editor.draft.desc = t.desc || '';
-    editor.draft.processText = JSON.stringify(t.process || [], null, 2);
-    editor.open = true;
+function selectBuiltin(p) {
+    manager.selKind = 'builtin';
+    manager.selName = p.name;
+    manager.draft.name = p.name;
+    manager.draft.desc = p.desc || '';
+    manager.draft.processText = JSON.stringify(p.process || [], null, 2);
 }
 
-function closeEditor() {
-    editor.open = false;
-    editor.original = '';
+function selectCustom(t) {
+    manager.selKind = 'custom';
+    manager.selName = t.name;
+    manager.draft.name = t.name;
+    manager.draft.desc = t.desc || '';
+    manager.draft.processText = JSON.stringify(t.process || [], null, 2);
 }
 
-async function saveEdit() {
+/** 新建：以编辑器里当前的算子链为初值，右侧直接进入编辑态 */
+function startNew() {
+    if (!list.value.length) return;
+    manager.selKind = 'new';
+    manager.selName = '';
+    manager.draft.name = '';
+    manager.draft.desc = '';
+    manager.draft.processText = JSON.stringify(list.value, null, 2);
+}
+
+async function saveDraft() {
     let process;
     try {
-        process = JSON.parse(editor.draft.processText);
+        process = JSON.parse(manager.draft.processText);
     } catch {
         return message.error('算子链 JSON 解析失败，检查一下括号和引号');
     }
     if (!Array.isArray(process) || !process.length) {
         return message.error('算子链必须是非空数组');
     }
-    editor.saving = true;
+    const name = manager.draft.name.trim();
+    if (!name) return message.error('模板名称不能为空');
+    manager.saving = true;
     try {
-        await updateTemplate(editor.original, {
-            name: editor.draft.name.trim(),
-            desc: editor.draft.desc.trim(),
-            process,
-        });
-        editor.open = false;
-        editor.original = '';
-        message.success('模板已更新');
+        if (manager.selKind === 'new') {
+            await createTemplate({ name, desc: manager.draft.desc.trim(), process });
+            message.success(`模板「${name}」已保存`);
+        } else {
+            await updateTemplate(manager.selName, { name, desc: manager.draft.desc.trim(), process });
+            message.success('模板已更新');
+        }
+        manager.selKind = 'custom';
+        manager.selName = name;
     } catch (e) {
         message.error(e.message, { duration: 8000 });
     } finally {
-        editor.saving = false;
+        manager.saving = false;
     }
 }
 
-function askDelete(t) {
+/** 套用右侧当前选中的模板（内置或自定义），整条覆盖当前算子链 */
+function applySelected() {
+    const pool = manager.selKind === 'builtin' ? processPresets.value : customTemplates.value;
+    const p = pool.find((x) => x.name === manager.selName);
+    if (p) applyTemplateProcess(p.process, p.name);
+}
+
+function askDeleteSelected() {
+    const name = manager.selName;
+    if (!name) return;
     dialog.warning({
         title: '删除模板',
-        content: `确定删除自定义模板「${t.name}」？此操作不可撤销。`,
+        content: `确定删除自定义模板「${name}」？此操作不可撤销。`,
         positiveText: '删除',
         negativeText: '取消',
         onPositiveClick: async () => {
             try {
-                await removeTemplate(t.name);
-                if (editor.original === t.name) closeEditor();
+                await removeTemplate(name);
                 message.success('已删除');
+                if (customTemplates.value.length) selectCustom(customTemplates.value[0]);
+                else manager.selKind = '';
             } catch (e) {
                 message.error(e.message, { duration: 8000 });
             }
@@ -626,9 +678,10 @@ function askDelete(t) {
 }
 
 /** 交给 AI：跳到 AI 助手并把该模板设为对话目标（AIAssistant 读 query.template） */
-function editWithAi(t) {
+function editWithAiSelected() {
+    const name = manager.selName;
     closeManager();
-    router.push({ path: '/ai', query: { template: t.name } });
+    router.push({ path: '/ai', query: { template: name } });
 }
 
 function removeOp(i) {

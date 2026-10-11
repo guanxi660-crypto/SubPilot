@@ -31,7 +31,6 @@ export function defaultSettings() {
         
         publicBaseUrl: '',
         
-        defaultTarget: 'clash',
         defaultConfig: '',
         
         feedSalt: '',
@@ -139,6 +138,8 @@ function normalizeSnapshot(raw) {
     
     out.rev = Number.isFinite(Number(out.rev)) ? Number(out.rev) : 0;
     out.settings = { ...defaultSettings(), ...(isPlainObject(raw.settings) ? raw.settings : {}) };
+    // 已废弃的设置键：旧库里可能还留着，清掉免得继续透传到 API / 备份 / 前端。
+    delete out.settings.defaultTarget;
     out.settings.ai = { ...defaultSettings().ai, ...(raw.settings?.ai || {}) };
     out.settings.sync = { ...defaultSettings().sync, ...(raw.settings?.sync || {}) };
     out.settings.sync.gist = {

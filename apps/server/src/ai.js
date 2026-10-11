@@ -3,6 +3,7 @@ import { fail, ok, isPlainObject } from './util.js';
 import { loadSnapshot } from './storage.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
 import { checkUrl, ssrfOptions } from './netguard.js';
+import { auditScriptCode, isScriptSupported } from './scriptrun.js';
 
 const DEFAULT_TIMEOUT = 90000;
 
@@ -30,25 +31,51 @@ export function buildSystemPrompt({
     task,
     currentProcess,
     currentTarget,
+    allowScript = true,
 }) {
-    
     const subList = Array.isArray(subs) ? subs : [];
     const colList = Array.isArray(collections) ? collections : [];
     const sampleList = Array.isArray(samples) ? samples : [];
     const totalCount = Number(total) || sampleList.length;
+    const scriptSupported = isScriptSupported();
+
+    const scriptDocs = allowScript
+        ? `
+## 自定义脚本（Script Operator）—— 算子不够用时的终极武器
+内置算子一律不命中（要按"机场 + 协议 + 编号"重排、批量改 TLS 等字段、做只对某
+几家机场成立的复杂改名）时，**直接用自定义脚本**：在链里写
+{"type":"Script Operator","args":{"code":"function(nodes, helpers){ ... return nodes; }"}}
+脚本是**同步函数**，接收完整节点数组、返回处理后的新数组。每个节点：
+{ format:"clash"|"uri", type, name, server, port, raw, obj? }
+- clash 节点的完整配置在 obj 里（可直接改）；uri 节点的原始行在 raw。
+- 改 name 字段会自动同步回原始行 / Clash 配置，不需要手写 URI 重写。
+- 可以 filter / sort / map / 增删节点，怎么方便怎么来。
+helpers 提供：helpers.rename(node,新名)、helpers.regionOf(name)→地区码、
+helpers.flagOf(码)→国旗、helpers.log(...)。
+**安全红线（用了整条代码块会被拒收）**：fetch / require / import / process /
+globalThis / eval / new Function / setTimeout / setInterval / constructor /
+__proto__ 等一律禁止 —— 你被沙箱隔离了，别尝试绕过，绕不过且会直接丢提案。
+脚本有 3 秒超时；返回非数组会报错。
+${
+    scriptSupported
+        ? ''
+        : '当前部署在 Cloudflare Workers（禁 eval），环境不允许脚本执行——即使你写出来也会被跳过。' +
+          '尽量用内置算子完成；非要脚本，提示用户切到 Node / Docker 部署。'
+}
+`
+        : '';
 
     
-    
-    
-    
-    const opDocs = OPERATOR_TYPES.map((o) => {
-        const args = JSON.stringify(o.args);
-        return [
-            `- ${o.type}（${o.label}）：${o.desc}`,
-            `  用法：${o.usage}`,
-            `  默认 args: ${args}`,
-        ].join('\n');
-    }).join('\n');
+    const opDocs = OPERATOR_TYPES.filter((o) => allowScript || o.type !== 'Script Operator')
+        .map((o) => {
+            const args = JSON.stringify(o.args);
+            return [
+                `- ${o.type}（${o.label}）：${o.desc}`,
+                `  用法：${o.usage}`,
+                `  默认 args: ${args}`,
+            ].join('\n');
+        })
+        .join('\n');
 
     
     
@@ -81,6 +108,7 @@ ${chain.length ? `\`\`\`json\n${JSON.stringify(chain, null, 2)}\n\`\`\`` : '（�
 ## 你可以做的事
 用一份 JSON 算子链（数组）描述对节点的操作。可用算子：
 ${opDocs}
+${scriptDocs}
 ${taskHint}${chainSection}
 ## 执行顺序
 算子链是**有序**的：数组第 1 个先执行，它的输出作为第 2 个的输入，依次往下。
@@ -133,6 +161,12 @@ ${taskHint}${chainSection}
 - 去掉「机场名 | 」前缀：[{"type":"Regex Rename","args":{"regex":["^[^|｜]*[|｜]\\\\s*",""]}}]
 - 重名加序号：[{"type":"Handle Duplicate","args":{"action":"rename"}}]
 
+脚本例子（内置算子做不到时用，格式要长这样）：
+- 按"地区码-序号"重排（雷同机场、混合协议时比 Sort Operator 好用）：
+  {"type":"Script Operator","args":{"code":"function(nodes,helpers){ return nodes.map(function(n){ var r=helpers.regionOf(n.name); var c=(r||'ZZ')+' '+n.name; helpers.rename(n,c); return n; }); }"}}
+- 批量把 vmess 的 socks 端口改 1080（只动 obj，URI 形态不动）：
+  {"type":"Script Operator","args":{"code":"function(nodes,helpers){ return nodes.map(function(n){ if(n.type==='vmess'&&n.format==='clash'){ n.obj.port=1080; } return n; }); }"}}
+
 ## 输出格式（严格遵守）
 先用中文简短说明你打算做什么（2-4 句，不要长篇大论），然后给出一个 \`\`\`json 代码块，内容是算子链数组。整体长这样：
 \`\`\`json
@@ -146,8 +180,9 @@ ${taskHint}${chainSection}
 
 ## 你不知道的事（不要编造）
 - 节点延迟、可用性、带宽：你拿不到任何测速数据。禁止推荐或编写测速脚本。
-- 你不能运行任意 JavaScript（运行时不支持 eval），没有 "Script Operator" 这种算子。
 - 你看不到完整的节点列表，只有下面这些样例。
+- 脚本沙箱外的一切（磁盘、网络、环境变量、其他订阅）都与你的脚本无关。写脚本时只
+  能依赖传入的 nodes / helpers，别尝试碰沙箱外的世界——审计会先拦下来。
 
 ## 当前站内数据
 订阅（${subList.length} 个）：${subList.map((s) => s.name).join('、') || '（无）'}
@@ -253,6 +288,7 @@ export async function handleAiStream(request, env, ctx) {
             }
 
             const messages = Array.isArray(body.messages) ? body.messages.slice(-20) : [];
+            const allowScript = snap.settings?.ai?.allowScript !== false;
             const system = buildSystemPrompt({
                 subs: snap.subs,
                 collections: snap.collections,
@@ -261,6 +297,7 @@ export async function handleAiStream(request, env, ctx) {
                 task: body.task === 'template' ? 'template' : 'source',
                 currentProcess: Array.isArray(body.process) ? body.process : [],
                 currentTarget: String(body.target || ''),
+                allowScript,
             });
 
             const payload = {
@@ -330,7 +367,7 @@ export async function handleAiStream(request, env, ctx) {
                     
                     
                     
-                    const { chain, dropped } = validateProposal(proposal);
+                    const { chain, dropped } = validateProposal(proposal, { allowScript });
                     if (chain.length) {
                         send({ type: 'proposal', process: chain, dropped });
                     } else {
@@ -409,7 +446,7 @@ for (const o of OPERATOR_TYPES) {
 }
 
 
-export function validateProposal(input) {
+export function validateProposal(input, { allowScript = true } = {}) {
     const chain = [];
     const dropped = [];
     for (const item of Array.isArray(input) ? input : []) {
@@ -423,9 +460,23 @@ export function validateProposal(input) {
             dropped.push(raw || '(缺 type)');
             continue;
         }
+        if (canonical === 'Script Operator') {
+            if (!allowScript) {
+                dropped.push('Script Operator（管理员已关闭脚本算子）');
+                continue;
+            }
+            const code = String(item.args?.code ?? '').trim();
+            if (!code) {
+                dropped.push('Script Operator（代码为空）');
+                continue;
+            }
+            const hits = auditScriptCode(code);
+            if (hits.length) {
+                dropped.push(`Script Operator（含禁用 API：${hits.join('、')}）`);
+                continue;
+            }
+        }
         const next = { type: canonical, args: isPlainObject(item.args) ? item.args : {} };
-        
-        
         const opName = String(item.name ?? '').trim().slice(0, 40);
         if (opName) next.name = opName;
         chain.push(next);

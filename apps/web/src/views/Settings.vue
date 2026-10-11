@@ -167,6 +167,27 @@
                 </div>
             </div>
 
+            <label class="flex items-center gap-2.5 mt-4 cursor-pointer select-none">
+                <input
+                    v-model="cfg.ai.allowScript"
+                    type="checkbox"
+                    class="w-4 h-4 accent-accent"
+                />
+                <span class="text-xs text-slate-400">
+                    允许 AI 助手生成自定义脚本算子（Script Operator）
+                </span>
+                <span
+                    class="text-[11px] text-slate-600"
+                    :title="scriptSupported ? '当前环境支持' : '当前部署在 Cloudflare Workers，脚本不会真正执行'"
+                >
+                    {{ scriptSupported ? '· Node/Docker 可用' : '· Workers 下不可执行' }}
+                </span>
+            </label>
+            <div class="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                关闭后 AI 只会输出内置算子；已保存的脚本算子会被忽略。脚本在沙箱里执行：
+                静态审计屏蔽 fetch / require / process 等危险 API，单次限时 3 秒。
+            </div>
+
             <div class="flex gap-2 mt-4">
                 <button class="btn-ghost text-xs" :disabled="saving" @click="save">保存</button>
                 <button class="btn-ghost text-xs" :disabled="busy" @click="testAi">探活测试</button>
@@ -212,6 +233,7 @@ import { api, setToken, auth } from '../stores/auth.js';
 import { backend, loadEnv } from '../stores/env.js';
 import { THEME_META, THEME_ORDER, themeMode, setTheme } from '../stores/theme.js';
 import { NO_AUTOFILL, secretFieldProps } from '../utils/inputs.js';
+import { scriptSupported, loadOperatorMeta } from '../stores/operators.js';
 
 // API Key 输入框（点击「点击修改」后才渲染）走 v3 密钥框方案：
 // text + 圆点伪装，密码管理器根本不认它是凭据字段 —— 见 utils/inputs.js。
@@ -236,7 +258,7 @@ const rotatedAt = ref('');
 
 const cfg = reactive({
     publicBaseUrl: '',
-    ai: { baseUrl: '', model: '', apiKey: '' },
+    ai: { baseUrl: '', model: '', apiKey: '', allowScript: true },
 });
 
 // ---- 模型下拉 / API Key 的「反密码管理器」状态 ----
@@ -284,6 +306,7 @@ async function loadSettings() {
         cfg.publicBaseUrl = res.data?.publicBaseUrl || '';
         cfg.ai.baseUrl = res.data?.ai?.baseUrl || '';
         cfg.ai.model = res.data?.ai?.model || '';
+        cfg.ai.allowScript = res.data?.ai?.allowScript !== false;
         cfg.ai.apiKey = '';
     } catch (e) {
         if (/令牌|401/.test(e.message)) router.push('/login');
@@ -300,7 +323,12 @@ async function save() {
             // 若跟着提交空值会把那边的设置清掉。
             body: JSON.stringify({
                 publicBaseUrl: cfg.publicBaseUrl,
-                ai: { baseUrl: cfg.ai.baseUrl, model: cfg.ai.model, apiKey: cfg.ai.apiKey },
+                ai: {
+                    baseUrl: cfg.ai.baseUrl,
+                    model: cfg.ai.model,
+                    apiKey: cfg.ai.apiKey,
+                    allowScript: cfg.ai.allowScript,
+                },
             }),
         });
         settings.value = res.data || {};
@@ -400,5 +428,6 @@ onMounted(async () => {
     document.addEventListener('click', onDocClick);
     await loadSettings();
     loadEnv(true);
+    loadOperatorMeta();
 });
 </script>

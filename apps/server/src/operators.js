@@ -1,5 +1,6 @@
 import { renameNode, regionOf, flagOf, REGIONS } from './nodes.js';
 import { isPlainObject } from './util.js';
+import { runScript } from './scriptrun.js';
 
 const MAX_NODES = 20000;
 
@@ -286,6 +287,28 @@ const HANDLERS = {
         }
         return nodes;
     },
+
+    // 自定义脚本：把整段 JS 交给 node:vm 沙箱执行（仅 Node / Docker 环境可用，
+    // Workers 上会由 runScript 抛出环境不支持的错误，逐层落到 log）。
+    // 执行体要求是一个函数：`function(nodes, helpers) { ... return nodes' }`。
+    'Script Operator'(nodes, args, log) {
+        const code = String(args?.code ?? '').trim();
+        if (!code) {
+            log.push('Script Operator：args.code 为空，已跳过');
+            return nodes;
+        }
+        const helpers = {
+            regionOf,
+            flagOf,
+            log: (...xs) => log.push(`脚本日志：${xs.map((x) => String(x)).join(' ')}`),
+        };
+        try {
+            return runScript(code, nodes, helpers);
+        } catch (e) {
+            log.push(`Script Operator：${e.message}`);
+            return nodes;
+        }
+    },
 };
 
 export function applyOperators(nodes, process) {
@@ -306,15 +329,7 @@ export function applyOperators(nodes, process) {
         }
         const handler = HANDLERS[op.type];
         if (!handler) {
-            
-            if (/script/i.test(op.type)) {
-                log.push(
-                    `${label}：不支持任意 JS 脚本（Workers 运行时禁 eval）。` +
-                        `请改用 Regex Rename / Regex Filter / Sort Operator 等内置算子组合实现。`,
-                );
-            } else {
-                log.push(`${label}：未知算子类型，已跳过`);
-            }
+            log.push(`${label}：未知算子类型，已跳过`);
             continue;
         }
         const before = cur.length;
@@ -493,6 +508,35 @@ export const OPERATOR_TYPES = [
             '可填 udp、tfo、skip-cert-verify 等布尔项，写进去的就是要改成的值，' +
             '没写的字段保持原样。不确定就别开 skip-cert-verify，会降低安全性。',
         args: { udp: true },
+    },
+    {
+        type: 'Script Operator',
+        label: '自定义脚本',
+        icon: '📜',
+        desc: '用一段 JS 函数任意变换节点列表（仅 Node / Docker 部署可用）',
+        usage:
+            '写一段 JS 函数，对整个节点数组做任意变换（比固定算子自由得多，推荐在算子做不了复杂逻辑时使用）。\n' +
+            '签名：function(nodes, helpers) { ...; return nodes }\n' +
+            'nodes 是节点数组，每个节点是 { id, format, type, name, server, port, raw, obj? }，' +
+            'format 是 "clash" 或 "uri"：clash 节点的完整配置在 obj 里可读取；uri 节点原始行在 raw。\n' +
+            '可以直接改 name、也可以整体增删节点 / 重排顺序；返回值必须是数组。' +
+            '改过 name 的节点会自动同步回它的原始行 / Clash 配置。\n' +
+            'helpers 提供：helpers.rename(node, 新名)、helpers.regionOf(节点名)（识别地区码）、' +
+            'helpers.flagOf(地区码)（取国旗）、helpers.log(...)。\n' +
+            '安全限制（以下写法会被拒绝执行）：fetch / require / import / process / globalThis / eval / ' +
+            'new Function / setTimeout / setInterval / constructor / __proto__ 等；有 3 秒超时限制。\n' +
+            '⚠️ 仅 Node / Docker 部署可执行；Cloudflare Workers 禁 eval，此算子会被跳过并给出提示。',
+        args: {
+            code:
+                'function (nodes, helpers) {\n' +
+                '  // 例：按地区给节点名加前缀\n' +
+                '  return nodes.map((n) => {\n' +
+                "    const r = helpers.regionOf(n.name);\n" +
+                '    if (r) helpers.rename(n, "[" + r + "] " + n.name);\n' +
+                '    return n;\n' +
+                '  });\n' +
+                '}',
+        },
     },
 ];
 

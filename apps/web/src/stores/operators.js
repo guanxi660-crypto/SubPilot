@@ -12,6 +12,8 @@ export const processPresets = ref([]);
 export const customTemplates = ref([]);
 export const sceTargets = ref([]);
 export const loaded = ref(false);
+/** 当前部署环境是否支持脚本算子（Node/Docker 支持，Cloudflare Workers 不支持） */
+export const scriptSupported = ref(false);
 
 /** 内置 + 自定义，供下拉菜单统一渲染 */
 export const allTemplates = computed(() => [
@@ -38,15 +40,27 @@ const FALLBACK_TYPES = [
     { type: 'Limit Operator', label: '数量截断', icon: '✂', desc: '只保留前 N 个', args: { limit: 100, from: 'head' } },
     { type: 'Quick Settings', label: '快速设置', icon: '⚙', desc: '批量改 UDP / TFO / 跳过证书验证', args: { udp: true } },
 ];
+// 脚本算子的骨架代码（兜底表与后端保持一致）。放在 FALLBACK_TYPES 之后单独导出，
+// 供「添加算子」时预填一份可直接改的示例。
+const SCRIPT_SKELETON = `function (nodes, helpers) {
+  // 例：按地区给节点名加前缀（改 name 会自动同步回原始行 / Clash 配置）
+  return nodes.map((n) => {
+    const r = helpers.regionOf(n.name);
+    if (r) helpers.rename(n, "[" + r + "] " + n.name);
+    return n;
+  });
+}`;
 
 export async function loadOperatorMeta(force = false) {
     if (loaded.value && !force) return;
     try {
         const res = await api('/api/operators');
-        operatorTypes.value = res.data?.types || [];
+        const types = res.data?.types || [];
+        operatorTypes.value = types;
         processPresets.value = res.data?.presets || [];
         customTemplates.value = res.data?.templates || [];
         sceTargets.value = res.data?.targets || [];
+        scriptSupported.value = res.data?.scriptSupported !== false;
     } catch {
         operatorTypes.value = FALLBACK_TYPES;
         processPresets.value = [];
@@ -56,6 +70,13 @@ export async function loadOperatorMeta(force = false) {
         if (!operatorTypes.value.length) operatorTypes.value = FALLBACK_TYPES;
         loaded.value = true;
     }
+}
+
+/** 新建脚本算子时的默认 args（骨架代码由后端 OPERATOR_TYPES 下发；兜底用本地常量） */
+export function defaultScriptArgs() {
+    const meta = operatorTypes.value.find((t) => t.type === 'Script Operator');
+    if (meta?.args?.code) return JSON.parse(JSON.stringify(meta.args));
+    return { code: SCRIPT_SKELETON };
 }
 
 // ---- 自定义模板 CRUD ----

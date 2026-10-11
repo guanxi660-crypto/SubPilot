@@ -136,7 +136,33 @@
                         {{ usageOf(op.type) }}
                     </div>
                     <div class="p-3">
+                        <!-- 脚本算子：code 是长代码块，用 JSON 编辑器写要满屏转义，
+                             专门给一个代码框，落回 args.code（与其他算子的 args 共用一套存储）。 -->
+                        <template v-if="op.type === 'Script Operator'">
+                            <div class="mb-1 text-[11px] text-slate-400">
+                                代码（一个 <span class="font-mono">function (nodes, helpers) =&gt; nodes</span>，
+                                支持 ES6+；改 name 自动回写原始行 / Clash 配置）
+                            </div>
+                            <textarea
+                                class="input w-full !py-2 !text-xs font-mono leading-relaxed"
+                                :rows="10"
+                                spellcheck="false"
+                                :value="String(op.args?.code ?? '')"
+                                @input="setScriptCode(i, $event.target.value)"
+                            ></textarea>
+                            <div class="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+                                <span v-if="!scriptSupported" class="text-amber-500/90 font-medium">
+                                    ⚠ 当前部署环境（Cloudflare Workers）禁 eval，此算子不会真正执行。
+                                    改用内置算子，或部署到 Node / Docker。
+                                </span>
+                                <span v-else>
+                                    危险能力会被拒绝：fetch / require / import / process / globalThis / eval /
+                                    new Function / setTimeout / setInterval / constructor 等，且单次限时 3 秒。
+                                </span>
+                            </div>
+                        </template>
                         <JsonEditor
+                            v-else
                             :model-value="opJson(i)"
                             label="参数 args（JSON）"
                             :rows="6"
@@ -401,6 +427,7 @@ import {
     metaOf,
     nextCustomName,
     OP_NAME_MAX,
+    scriptSupported,
 } from '../stores/operators.js';
 
 const props = defineProps({
@@ -463,10 +490,12 @@ function push(next) {
 // ---- 增删改 ----
 
 const addOptions = computed(() =>
-    (operatorTypes.value.length ? operatorTypes.value : []).map((t) => ({
-        label: `${t.icon}  ${t.label}  —  ${t.desc}`,
-        key: t.type,
-    })),
+    (operatorTypes.value.length ? operatorTypes.value : [])
+        .filter((t) => scriptSupported.value || t.type !== 'Script Operator')
+        .map((t) => ({
+            label: `${t.icon}  ${t.label}  —  ${t.desc}`,
+            key: t.type,
+        })),
 );
 
 function addOp(type) {
@@ -717,6 +746,20 @@ function setArgs(i, text) {
     } catch {
         /* JsonEditor 已经提示了，这里不覆盖，避免把非法内容写进链 */
     }
+}
+
+/** 脚本算子专用：整段代码写进 args.code（不经过 JSON.parse，避免转义地狱） */
+function setScriptCode(i, text) {
+    const next = list.value.map((o, k) => {
+        if (k !== i) return o;
+        const args = isPlainArgs(o.args) ? { ...o.args, code: text } : { code: text };
+        return { ...o, args };
+    });
+    push(next);
+}
+
+function isPlainArgs(v) {
+    return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
 function compactArgs(op) {

@@ -16,6 +16,7 @@ import { runPipeline, previewText, fetchSubText } from './pipeline.js';
 import { buildLinks, resolveSourceRefs, adhocSpec, publicBase, convertedBackendLink } from './convert.js';
 import { OPERATOR_TYPES, PROCESS_PRESETS } from './operators.js';
 import { handleTemplates, sanitizeProcess } from './templates.js';
+import { isScriptSupported } from './scriptrun.js';
 
 import serverPkg from '../package.json' with { type: 'json' };
 
@@ -105,6 +106,7 @@ export function publicSettings(settings) {
         model: ai.model || '',
         hasApiKey: !!ai.apiKey,
         apiKeyMask: maskSecret(ai.apiKey),
+        allowScript: ai.allowScript !== false,
     };
     const sync = s.sync || {};
     s.sync = {
@@ -173,15 +175,14 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
         });
     }
 
-    if (method === 'GET' && seg[0] === 'operators') {
-        
-        
+if (method === 'GET' && seg[0] === 'operators') {
         const snap = await loadSnapshot(env);
         return ok({
             types: OPERATOR_TYPES,
             presets: PROCESS_PRESETS,
             templates: snap.templates,
             targets: SCE_TARGETS,
+            scriptSupported: isScriptSupported(),
         });
     }
 
@@ -699,6 +700,7 @@ export async function handleApi(request, env, ctx, { method, path, query }) {
                     if (typeof inc.ai.baseUrl === 'string') cur.ai.baseUrl = inc.ai.baseUrl.trim();
                     if (typeof inc.ai.model === 'string') cur.ai.model = inc.ai.model.trim();
                     cur.ai.apiKey = mergeSecret(inc.ai.apiKey, cur.ai.apiKey);
+                    if ('allowScript' in inc.ai) cur.ai.allowScript = inc.ai.allowScript !== false;
                 }
                 if (isPlainObject(inc.sync)) {
                     if (['none', 'gist', 'webdav'].includes(inc.sync.provider)) {

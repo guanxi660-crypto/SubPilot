@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync, brotliCompressSync, constants as zlibConstants } from 'node:zlib';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 import worker from '../src/index.js';
 import { createAssets } from './assets.mjs';
@@ -15,6 +16,20 @@ import { createSqliteStore } from './sqlite-store.mjs';
 if (!globalThis.crypto?.subtle) {
     const { webcrypto } = await import('node:crypto');
     globalThis.crypto = webcrypto;
+}
+
+// 脚本算子（Script Operator）沙箱：把 node:vm 同步注入给 src/scriptrun.js 用。
+// 只在 Node 自建部署注入 —— Cloudflare Workers 没有这套（且禁 eval / new Function），
+// scriptrun.js 读不到时就保持"不可执行"并给出降级指引。
+// 用 createRequire 而不是 import('node:vm')：脚本执行是同步链路，import 是异步的，
+// 而且 wrangler 打包会被 node:vm 的静态分析绊倒。
+{
+    const require = createRequire(import.meta.url);
+    try {
+        globalThis.__SUBPILOT_VM__ = require('node:vm');
+    } catch {
+        globalThis.__SUBPILOT_VM__ = null;
+    }
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));

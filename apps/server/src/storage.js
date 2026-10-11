@@ -36,7 +36,7 @@ export function defaultSettings() {
         feedSalt: '',
         feedSaltCreatedAt: '',
         
-        ai: { baseUrl: '', model: '', apiKey: '' },
+        ai: { baseUrl: '', model: '', apiKey: '', allowScript: true },
         
         sync: {
             provider: 'none', 

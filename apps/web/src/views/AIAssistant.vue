@@ -372,7 +372,12 @@ async function runPreview() {
         return;
     }
     const isCol = !isTpl && sourceKey.value.startsWith('col:');
-    const chain = pendingProposal.value?.proposal ?? draft.value;
+    let pending = null;
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+        const m = messages.value[i];
+        if (m.role === 'assistant' && m.proposal && !m.resolved) { pending = m; break; }
+    }
+    const chain = pending?.proposal ?? draft.value;
     preview.loading = true;
     preview.error = '';
     try {
@@ -692,9 +697,8 @@ async function send(preset) {
                     assistant.content += evt.delta;
                     scrollBottom();
                 } else if (evt.type === 'proposal') {
-                    // 提案一到位，左侧实时预览就会自动切到提案效果（watch pendingProposal）
                     assistant.proposal = evt.process;
-                    // 模型编造的算子已在服务端剔掉，这里如实告诉用户
+                    runPreview();
                     if (evt.dropped?.length) {
                         message.warning(`已忽略助手编造的算子：${evt.dropped.join('、')}`, { duration: 8000 });
                     }
@@ -762,13 +766,13 @@ async function saveProposal(m) {
     m.saving = true;
     try {
         await writeProcess(cur, next);
-        // 草稿跟着更新，否则侧栏还挂着旧链，看着像没保存成功
         draft.value = next;
         m.resolved = 'saved';
         m.savedTo = cur.displayName || cur.name;
         persist();
         message.success(`已保存 ${next.length} 个算子到「${m.savedTo}」`);
         await load();
+        runPreview();
     } catch (e) {
         // 失败不置 resolved —— 按钮留着，改完配置还能再点一次
         message.error(e.message, { duration: 8000 });
@@ -795,6 +799,7 @@ async function writeProcess(cur, process) {
 function ignoreProposal(m) {
     m.resolved = 'ignored';
     persist();
+    runPreview();
 }
 
 function clearDraft() {

@@ -1,10 +1,11 @@
 # SubPilot
 
+> **当前分支 `main`** —— Cloudflare Worker 部署版（KV 存储 + QuickJS WASM 脚本沙箱）
+> · Docker / Node.js 自建部署请看 [`dev` 分支](../../tree/dev)
+
 一体化订阅管理面板：**订阅管理 · 节点拼接（组合）· 格式转换 · 文件与文档管理 · AI 助手**。
 
 前端是 Vue 3 单页应用；后端部署到 **Cloudflare Worker**，存储用 KV。
-
-> **Docker / Node.js 自建部署**已移至 [`dev` 分支](../../tree/dev)，包含 SQLite 存储、Dockerfile、Node 适配层等。main 分支仅维护 Worker 版。
 
 ```
 浏览器（Vue 3 SPA）

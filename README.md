@@ -34,6 +34,16 @@ SubPilot 服务端 ────────────────────�
 **出处引用**：算子链 DSL 与 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 保持兼容；
 完整第三方声明见 `NOTICE` 与文末「许可」。
 
+## 截图
+
+| | |
+| --- | --- |
+| ![概览](shots/11-概览-玻璃.png) | ![订阅](shots/02-订阅.png) |
+| ![订阅编辑](shots/03-订阅编辑.png) | ![转换](shots/06-转换.png) |
+| ![文件](shots/05-文件.png) | ![AI 助手](shots/08-AI助手.png) |
+
+更多页面与亮色 / 暗色 / 玻璃三种主题的对比见 [shots/](shots/)。
+
 ## 部署
 
 自建形态（`apps/server/node/`）把 4 个平台专有能力换掉：

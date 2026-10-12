@@ -169,21 +169,7 @@ docker compose down
 平台若支持直接用 Dockerfile，把 zip 换成「选本仓库 + 自动识别 Dockerfile」更省事，
 配置与上面一致。
 
-裸机 / 自己的服务器上跑也是同一套：
 
-```bash
-npm run install:all
-npm run build
-SUBPILOT_TOKEN='<你的令牌>' npm start
-```
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm run install:all` | 安装依赖（含前端构建所需） |
-| `npm run build` | 构建前端到 `apps/web/dist` |
-| `npm start` | 起服务，监听 `http://0.0.0.0:8795` |
-
-需要 **Node 22.5+**（`node:sqlite` 内置），无需原生编译工具链。
 
 ### 本地开发
 
@@ -193,13 +179,6 @@ SUBPILOT_TOKEN=dev-local npm start
 npm run dev:web
 ```
 
-三条命令依次是：
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm run install:all` | 安装前后端依赖（逐个包安装，不用 workspaces） |
-| `SUBPILOT_TOKEN=dev-local npm start` | 起后端（Node 形态，`node index.js`） |
-| `npm run dev:web` | 起前端 dev server |
 
 后端跑起来后打开 `http://127.0.0.1:8795`，令牌填 `dev-local`
 （即上面 `SUBPILOT_TOKEN` 设的值）。前端 dev server 在

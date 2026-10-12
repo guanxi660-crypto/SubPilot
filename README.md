@@ -171,6 +171,14 @@ docker compose down
 
 
 
+### Fork 部署须知
+
+Fork 本仓库后通过 Cloudflare Workers Builds 部署时，如果构建报 `vite: not found`，
+是因为 Cloudflare 构建环境默认 `NODE_ENV=production` 会跳过 devDependencies。
+本仓库已将构建依赖（vite、tailwindcss 等）放在 `dependencies` 中以避免此问题。
+若仍遇到类似错误，请在 Cloudflare 构建配置中设置环境变量 `NODE_ENV=development`，
+或使用 `npm install --include=dev` 安装完整依赖后再构建。
+
 ### 本地开发
 
 ```bash

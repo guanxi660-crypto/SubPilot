@@ -1,6 +1,6 @@
 {
     "name": "subpilot",
-    "version": "0.1.16",
+    "version": "0.1.17",
     "private": true,
     "type": "module",
     "description": "SubPilot —— 一体化订阅管理面板：订阅管理 / 节点拼接 / 格式转换 / 文件与文档管理 / AI 助手，部署到 Cloudflare Worker",

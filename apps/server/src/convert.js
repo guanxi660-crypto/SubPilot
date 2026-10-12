@@ -399,10 +399,6 @@ export async function handleConvertLink(request, env, ctx, { query }) {
 
 export function convertedBackendLink({ env, snap, item, base, code }) {
     const name = String(item?.name || '').trim();
-    
-    const saved = String(item?.backendUrl || '').trim();
-    if (saved) return saved;
-    
     const origin = String(base || '').replace(/\/+$/, '');
     if (!name || !origin) return '';
     const c =
@@ -410,14 +406,7 @@ export function convertedBackendLink({ env, snap, item, base, code }) {
         (snap?.shares || []).find((s) => s.type === 'converted' && s.name === name)?.code ||
         '';
     if (!c) return '';
-    
-    const target = item?.target && item.target !== 'raw' ? item.target : 'clash';
-    const params = {
-        target,
-        url: `${origin}/share/converted/${encodeURIComponent(name)}?code=${c}`,
-    };
-    if (item?.template) params.config = String(item.template);
-    return buildSceUrl(resolveBackend(env, snap?.settings), params);
+    return `${origin}/download/converted/${encodeURIComponent(name)}?code=${c}`;
 }
 
 
@@ -519,19 +508,39 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
     
     
     const isAdhoc = seg[0] === 'adhoc';
+    const isConverted = seg[0] === 'converted';
     const specRaw = isAdhoc ? query.get('spec') || '' : '';
-    const name = isAdhoc
-        ? shortHash(specRaw)
-        : decodeURIComponent(isCollection ? seg[1] || '' : seg[0] || '');
+    const name = isConverted
+        ? decodeURIComponent(seg[1] || '')
+        : isAdhoc
+          ? shortHash(specRaw)
+          : decodeURIComponent(isCollection ? seg[1] || '' : seg[0] || '');
     if (!name) return fail('缺少名称', 400);
 
     const snap = await loadSnapshot(env);
     const auth = await authorizeDistribution(env, snap, query, {
-        kind: isAdhoc ? 'adhoc' : isCollection ? 'col' : 'sub',
+        kind: isConverted ? 'converted' : isAdhoc ? 'adhoc' : isCollection ? 'col' : 'sub',
         name,
         tokenFromAuth,
     });
     if (!auth.ok) return fail('分发链接无效或已过期', 403);
+
+    if (isConverted) {
+        const item = snap.converted.find((c) => c.name === name);
+        if (!item) return fail(`快照不存在：${name}`, 404);
+        if (ctx?.waitUntil && !isTgCrawler(request)) {
+            ctx.waitUntil(
+                recordPull(env, {
+                    type: '转换快照',
+                    item: name,
+                    ip: clientIp(request),
+                }).catch(() => {}),
+            );
+        }
+        return text(item.content || '', 200, contentTypeForTarget(item.target), {
+            'Access-Control-Allow-Origin': '*',
+        });
+    }
 
     const q = new URLSearchParams(query);
     q.delete('token');

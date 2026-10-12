@@ -26,7 +26,7 @@ SubPilot Worker ─────────────────────�
         /download/*、/share/*   客户端直接拉取（只读分发密钥）
 ```
 
-[本项目默认后端版本](https://subpilot.57995799.xyz/version) · 基于 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended)
+[本项目默认转换后端版本](https://subpilot.57995799.xyz/version) · 基于 [SubConverter-Extended](https://github.com/Aethersailor/SubConverter-Extended) 
 
 该后端实例由作者自建、**公益免费提供**，`SUB_BACKEND` 已预置此地址，开箱即用；
 不承诺可用性与稳定性，请勿滥用，有稳定性要求请换自建后端。
@@ -83,13 +83,6 @@ npm run dev:server
 npm run dev:web
 ```
 
-三条命令依次是：
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm run install:all` | 安装前后端依赖（逐个包安装，不用 workspaces） |
-| `npm run dev:server` | 起后端（Worker 形态，`wrangler dev`） |
-| `npm run dev:web` | 起前端 dev server |
 
 后端跑起来后打开 `http://127.0.0.1:8795`，令牌填 `dev-local-token`
 （该值来自 `apps/server/wrangler.dev.jsonc`）。前端 dev server 在

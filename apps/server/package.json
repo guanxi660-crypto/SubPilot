@@ -1,16 +1,24 @@
 {
     "name": "@subpilot/server",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "private": true,
     "license": "AGPL-3.0-only",
     "type": "module",
-    "engines": {
-        "node": ">=22.5"
-    },
     "scripts": {
-        "start": "node --disable-warning=ExperimentalWarning node/server.js"
+        "dev": "wrangler dev -c wrangler.dev.jsonc --port 8795 --persist-to=.wrangler/state",
+        "deploy": "wrangler deploy -c wrangler.jsonc",
+        "tail": "wrangler tail -c wrangler.jsonc"
     },
     "dependencies": {
+
+        "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+        "quickjs-emscripten": "^0.32.0",
         "yaml": "^2.6.1"
+    },
+    "devDependencies": {
+        "wrangler": "^4.147.0"
+    },
+    "optionalDependencies": {
+        "@cloudflare/workerd-windows-64": "^1.20261008.1"
     }
 }

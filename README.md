@@ -75,6 +75,29 @@ SubPilot Worker ─────────────────────�
 > [`dev` 分支](../../tree/dev#部署)。该分支包含 SQLite 存储、Dockerfile、docker-compose.yml、
 > Node 适配层（`apps/server/node/`）以及对应的 README 说明。
 
+### 混输兼容说明（订阅混源时的输出格式与客户端兼容性）
+
+一个订阅/组合里同时含 **URI 分享链接**（vless://、vmess:// 等）和 **Clash YAML 片段**（如 mieru 这类没有分享链接格式的协议）时，输出格式按以下规则自动选择：
+
+| 来源构成 | 输出格式 | 说明 |
+| --- | --- | --- |
+| 纯 URI 节点 | base64 URI 列表 | 原样透传，参数零损耗，兼容所有客户端 |
+| 纯 Clash YAML 节点 | Clash YAML（`proxies:`） | 节点对象原样保留 |
+| **URI + YAML 混源** | **Clash YAML 统一输出** | URI 节点自动转换成 mihomo 对象（字段映射经真实 mihomo 内核逐节点验证），不再丢弃 YAML 源节点 |
+
+响应头可用于排查：`X-SubPilot-Format`（uri/clash）、`X-SubPilot-Converted`（本次 URI→Clash 转换数）、`X-SubPilot-Dropped`（无法安全转换被丢弃的节点数，如 wireguard/ssr）。
+
+**客户端兼容性**（混源输出为 Clash YAML 时）：
+
+| 客户端 | 兼容情况 |
+| --- | --- |
+| OpenClash / mihomo / Clash Verge Rev | ✅ 全部节点可用 |
+| v2rayN / v2rayNG（新版，支持 YAML 订阅） | ⚠️ 仅 vless / vmess / trojan / ss 可用（Xray 内核）；hysteria2 / tuic / anytls 需切换 sing-box 内核 |
+| 仅支持 base64 订阅的旧客户端 | ❌ 无法识别混源输出 |
+| **mieru** | ❌ mihomo 专属协议，任何 v2ray / sing-box 内核都不支持，只能在 mihomo 系客户端使用 |
+
+**建议**：混源订阅请用 mihomo 系客户端（OpenClash 等）。若主用 v2rayN，请单独建一条纯 URI 订阅给它的内核使用——注意 tuic / hysteria2 / anytls / mieru 这类节点在 v2ray 系内核里本身就不存在，与混输无关。
+
 ### Fork 部署须知
 
 Fork 本仓库后通过 Cloudflare Workers Builds 部署时，如果构建报 `vite: not found`，

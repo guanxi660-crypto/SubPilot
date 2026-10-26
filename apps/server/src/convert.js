@@ -3,7 +3,8 @@ import { safeEqual, b64decode, b64encode, b64urlEncode, ok, fail, text, toString
 import { loadSnapshot, recordPull, mutate } from './storage.js';
 import { resolveBackend, callSce, describeSceError, buildSceUrl } from './sce.js';
 import { runPipeline, stripRefPrefix } from './pipeline.js';
-import { serializeNodes } from './nodes.js';
+import { serializeNodes, serializeClashResult } from './nodes.js';
+import { stringify as stringifyYaml } from 'yaml';
 import { deriveFeedKey, ensureFeedSalt, checkFeedKey } from './feedkey.js';
 import { checkUrl, ssrfOptions } from './netguard.js';
 
@@ -340,8 +341,12 @@ async function rawChannel(env, snap, sources, process) {
     
     
     
+    // 纯 URI 源:保持「原样透传」通道(base64 URI 列表,参数零损耗)。
+    // 混源(含 Clash YAML 源)或纯 YAML 源:统一走 Clash YAML 通道 ——
+    // URI 节点转成 mihomo 对象(mieru 等 YAML 专属协议没有分享链接格式,
+    // 且新版 v2rayN 等客户端也支持 YAML 订阅),不再静默丢弃 YAML 节点。
     const uriNodes = result.nodes.filter((n) => n.raw);
-    if (uriNodes.length) {
+    if (uriNodes.length === result.nodes.length) {
         return text(serializeNodes(result.nodes, 'uri'), 200, 'text/plain;charset=UTF-8', {
             'Cache-Control': 'no-store',
             'X-SubPilot-Nodes': String(uriNodes.length),
@@ -349,10 +354,13 @@ async function rawChannel(env, snap, sources, process) {
             'Access-Control-Allow-Origin': '*',
         });
     }
-    return text(serializeNodes(result.nodes, 'clash'), 200, 'text/yaml;charset=UTF-8', {
+    const clash = serializeClashResult(result.nodes);
+    return text(stringifyYaml({ proxies: clash.proxies }), 200, 'text/yaml;charset=UTF-8', {
         'Cache-Control': 'no-store',
-        'X-SubPilot-Nodes': String(result.nodes.length),
+        'X-SubPilot-Nodes': String(clash.proxies.length),
         'X-SubPilot-Format': 'clash',
+        'X-SubPilot-Converted': String(clash.converted),
+        'X-SubPilot-Dropped': String(clash.dropped),
         'Access-Control-Allow-Origin': '*',
     });
 }
@@ -399,6 +407,10 @@ export async function handleConvertLink(request, env, ctx, { query }) {
 
 export function convertedBackendLink({ env, snap, item, base, code }) {
     const name = String(item?.name || '').trim();
+    // 活链:保存时前端交上来的后端地址(产出面板那条)。卡片复制 / TG 推送
+    // 原样用它,与产出面板逐字一致;内容跟随订阅更新。
+    const live = String(item?.backendUrl || '').trim();
+    if (/^https?:\/\//i.test(live)) return live;
     const origin = String(base || '').replace(/\/+$/, '');
     if (!name || !origin) return '';
     const c =
@@ -406,7 +418,14 @@ export function convertedBackendLink({ env, snap, item, base, code }) {
         (snap?.shares || []).find((s) => s.type === 'converted' && s.name === name)?.code ||
         '';
     if (!c) return '';
-    return `${origin}/download/converted/${encodeURIComponent(name)}?code=${c}`;
+    // 老成品(活链字段上线前保存的)退回快照链:交给转换后端,内容取自
+    // 本站 /share/converted 快照 —— 固定 code,链接不随后续重存变化。
+    const backend = resolveBackend(env, snap?.settings);
+    const inner = `${origin}/share/converted/${encodeURIComponent(name)}?code=${encodeURIComponent(c)}`;
+    const qs = new URLSearchParams({ target: String(item?.target || 'clash'), url: inner });
+    const template = String(item?.template || '').trim();
+    if (template) qs.set('config', template);
+    return `${backend}/sub?${qs.toString()}`;
 }
 
 

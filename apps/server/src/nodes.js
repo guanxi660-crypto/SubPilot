@@ -183,24 +183,40 @@ export function parseNodes(text) {
 
     if (fmt === 'clash') {
         // 混贴(URI 行 + Clash YAML 块,社区分享常见「vless://... 多行 + proxies:」):
-        // 整体 parseYaml 会丢掉 URI 行 —— 按行拆成 URI 列表 + YAML 文档两部分分别解析。
+        // 整体 parseYaml 会丢掉 URI 行 —— 按**输入顺序**分成连续段(URI 段 / YAML 段)
+        // 分别解析后按段序拼接,保证节点顺序与粘贴顺序一致(mieru 等 YAML 节点
+        // 不会因为解析分类而被垫到最后)。
         const lines = text.split(/\r?\n/);
-        if (lines.some((l) => /^[a-z][a-z0-9+.-]*:\/\//i.test(l.trim()))) {
-            const uriLines = [];
-            const yamlLines = [];
+        const isUriLine = (l) => /^[a-z][a-z0-9+.-]*:\/\//i.test(l.trim());
+        if (lines.some(isUriLine)) {
+            const nodes = [];
+            let seg = [];
+            let segIsUri = isUriLine(lines.find((l) => l.trim()) || '');
+            const flush = () => {
+                if (!seg.length) return;
+                if (segIsUri) {
+                    nodes.push(...parseNodes(seg.join('\n')).nodes);
+                } else if (seg.some((l) => l.trim())) {
+                    try {
+                        nodes.push(...clashProxiesToNodes(parseYaml(seg.join('\n'))));
+                    } catch {
+                        // YAML 段坏掉:跳过该段,URI 节点照常输出
+                    }
+                }
+                seg = [];
+            };
+            let error = '';
             for (const l of lines) {
-                (/^[a-z][a-z0-9+.-]*:\/\//i.test(l.trim()) ? uriLines : yamlLines).push(l);
+                const u = isUriLine(l);
+                if (seg.length && u !== segIsUri) {
+                    flush();
+                    segIsUri = u;
+                }
+                seg.push(l);
             }
-            const nodes = uriLines.length ? [...parseNodes(uriLines.join('\n')).nodes] : [];
-            try {
-                const doc = parseYaml(yamlLines.join('\n'));
-                nodes.push(...clashProxiesToNodes(doc));
-                return { format: 'clash', nodes };
-            } catch (e) {
-                if (!nodes.length) return { format: 'clash', nodes: [], error: `Clash YAML 解析失败：${e.message}` };
-                // URI 部分解析成功、YAML 块坏了:保住 URI,错误留在日志语义里
-                return { format: 'clash', nodes, error: `Clash YAML 块解析失败：${e.message}` };
-            }
+            flush();
+            if (!nodes.length) error = '混贴内容未能解析出任何节点';
+            return { format: 'clash', nodes, ...(error ? { error } : {}) };
         }
         try {
             const doc = parseYaml(text);

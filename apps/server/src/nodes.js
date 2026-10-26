@@ -242,7 +242,34 @@ export function serializeNodes(nodes, format) {
         const proxies = nodes.map((n) => n.obj || { name: n.name, type: n.type, server: n.server, port: n.port });
         return stringifyYaml({ proxies });
     }
-    return b64encode(nodes.map((n) => n.raw).filter(Boolean).join('\n'));
+    // 有些机场/工具把 userinfo 整体 encodeURIComponent,连 uuid:password 的分隔冒号
+    // 也写成了 %3A。mihomo 的 Go URL 解析器不把 %3A 当分隔符(只有裸冒号才分割),
+    // 于是整串被当成 username、password 为空 —— TUIC 等认证直接失败(节点还在但连不上)。
+    // 输出前把 userinfo 里的 %3A 还原成冒号;其余字节一律不动,保持「原样透传」性质。
+    return b64encode(nodes.map((n) => n.raw).filter(Boolean).map(normalizeUriUserInfo).join('\n'));
+}
+
+/**
+ * 只修一种坏编码:userinfo 段(用户名:密码)里没有裸冒号、但含 %3A ——
+ * 即分隔冒号被整体编码了。此时把 %3A 还原成 ':',让 mihomo 等按标准语义
+ * 把 username/password 拆开。userinfo 已有裸冒号(分隔正常)或没有 %3A 的
+ * 一律原样返回;query / fragment 里的 %3A 完全不碰。
+ *
+ * 只对 userinfo **恒为 user:password 语义**的协议生效(tuic / ss / socks / http),
+ * 由 URI_PROTOCOL_USERPASS 白名单限定。vless(vmess) 的 userinfo 是单个 uuid、
+ * trojan / anytls 是单个密码、hysteria2 可能是单 token —— 这些协议里 %3A 属于
+ * 值本身的一部分,还原反而会改坏语义,所以明确排除。
+ */
+const URI_PROTOCOL_USERPASS = new Set(['tuic', 'ss', 'socks', 'socks5', 'http', 'https']);
+
+function normalizeUriUserInfo(line) {
+    const m = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^@/?#]*)@/.exec(line);
+    if (!m) return line;
+    const scheme = m[1].slice(0, -3).toLowerCase(); // 去掉 '://'
+    if (!URI_PROTOCOL_USERPASS.has(scheme)) return line;
+    const userinfo = m[2];
+    if (!/%3A/i.test(userinfo) || userinfo.includes(':')) return line;
+    return `${m[1]}${userinfo.replace(/%3A/gi, ':')}@${line.slice(m[0].length)}`;
 }
 
 export function summarize(nodes) {

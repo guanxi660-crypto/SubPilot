@@ -3,7 +3,8 @@ import { safeEqual, b64decode, b64encode, b64urlEncode, ok, fail, text, toString
 import { loadSnapshot, recordPull, mutate } from './storage.js';
 import { resolveBackend, callSce, describeSceError, buildSceUrl } from './sce.js';
 import { runPipeline, stripRefPrefix } from './pipeline.js';
-import { serializeNodes } from './nodes.js';
+import { serializeNodes, serializeClashResult } from './nodes.js';
+import { stringify as stringifyYaml } from 'yaml';
 import { deriveFeedKey, ensureFeedSalt, checkFeedKey } from './feedkey.js';
 import { checkUrl, ssrfOptions } from './netguard.js';
 
@@ -340,8 +341,12 @@ async function rawChannel(env, snap, sources, process) {
     
     
     
+    // 纯 URI 源:保持「原样透传」通道(base64 URI 列表,参数零损耗)。
+    // 混源(含 Clash YAML 源)或纯 YAML 源:统一走 Clash YAML 通道 ——
+    // URI 节点转成 mihomo 对象(mieru 等 YAML 专属协议没有分享链接格式,
+    // 且新版 v2rayN 等客户端也支持 YAML 订阅),不再静默丢弃 YAML 节点。
     const uriNodes = result.nodes.filter((n) => n.raw);
-    if (uriNodes.length) {
+    if (uriNodes.length === result.nodes.length) {
         return text(serializeNodes(result.nodes, 'uri'), 200, 'text/plain;charset=UTF-8', {
             'Cache-Control': 'no-store',
             'X-SubPilot-Nodes': String(uriNodes.length),
@@ -349,10 +354,13 @@ async function rawChannel(env, snap, sources, process) {
             'Access-Control-Allow-Origin': '*',
         });
     }
-    return text(serializeNodes(result.nodes, 'clash'), 200, 'text/yaml;charset=UTF-8', {
+    const clash = serializeClashResult(result.nodes);
+    return text(stringifyYaml({ proxies: clash.proxies }), 200, 'text/yaml;charset=UTF-8', {
         'Cache-Control': 'no-store',
-        'X-SubPilot-Nodes': String(result.nodes.length),
+        'X-SubPilot-Nodes': String(clash.proxies.length),
         'X-SubPilot-Format': 'clash',
+        'X-SubPilot-Converted': String(clash.converted),
+        'X-SubPilot-Dropped': String(clash.dropped),
         'Access-Control-Allow-Origin': '*',
     });
 }

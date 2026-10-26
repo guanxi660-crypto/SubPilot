@@ -1,5 +1,6 @@
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { b64decode, b64encode, looksLikeBase64 } from './util.js';
+import { uriToClashObj, normalizeMieruTransport } from './uri2clash.js';
 
 const KNOWN_SCHEMES = [
     'ss', 'ssr', 'ssd', 'vmess', 'vless', 'trojan', 'trojan-go',
@@ -160,26 +161,50 @@ function safeJson(s) {
     }
 }
 
+// Clash YAML 的 proxies 数组 → 节点对象(obj 原样保留,输出时零损耗)
+function clashProxiesToNodes(doc) {
+    const list = Array.isArray(doc?.proxies) ? doc.proxies : [];
+    return list
+        .filter((p) => p && typeof p === 'object' && p.name)
+        .map((p, i) => ({
+            id: `c${i}-${hash8(JSON.stringify(p).slice(0, 200))}`,
+            format: 'clash',
+            type: String(p.type || 'unknown').toLowerCase(),
+            name: String(p.name),
+            server: String(p.server ?? ''),
+            port: parseInt(p.port, 10) || 0,
+            obj: p,
+        }));
+}
+
 export function parseNodes(text) {
     const fmt = detectFormat(text);
     if (fmt === 'empty') return { format: 'unknown', nodes: [], error: '内容为空' };
 
     if (fmt === 'clash') {
+        // 混贴(URI 行 + Clash YAML 块,社区分享常见「vless://... 多行 + proxies:」):
+        // 整体 parseYaml 会丢掉 URI 行 —— 按行拆成 URI 列表 + YAML 文档两部分分别解析。
+        const lines = text.split(/\r?\n/);
+        if (lines.some((l) => /^[a-z][a-z0-9+.-]*:\/\//i.test(l.trim()))) {
+            const uriLines = [];
+            const yamlLines = [];
+            for (const l of lines) {
+                (/^[a-z][a-z0-9+.-]*:\/\//i.test(l.trim()) ? uriLines : yamlLines).push(l);
+            }
+            const nodes = uriLines.length ? [...parseNodes(uriLines.join('\n')).nodes] : [];
+            try {
+                const doc = parseYaml(yamlLines.join('\n'));
+                nodes.push(...clashProxiesToNodes(doc));
+                return { format: 'clash', nodes };
+            } catch (e) {
+                if (!nodes.length) return { format: 'clash', nodes: [], error: `Clash YAML 解析失败：${e.message}` };
+                // URI 部分解析成功、YAML 块坏了:保住 URI,错误留在日志语义里
+                return { format: 'clash', nodes, error: `Clash YAML 块解析失败：${e.message}` };
+            }
+        }
         try {
             const doc = parseYaml(text);
-            const list = Array.isArray(doc?.proxies) ? doc.proxies : [];
-            const nodes = list
-                .filter((p) => p && typeof p === 'object' && p.name)
-                .map((p, i) => ({
-                    id: `c${i}-${hash8(JSON.stringify(p).slice(0, 200))}`,
-                    format: 'clash',
-                    type: String(p.type || 'unknown').toLowerCase(),
-                    name: String(p.name),
-                    server: String(p.server ?? ''),
-                    port: parseInt(p.port, 10) || 0,
-                    obj: p,
-                }));
-            return { format: 'clash', nodes };
+            return { format: 'clash', nodes: clashProxiesToNodes(doc) };
         } catch (e) {
             return { format: 'clash', nodes: [], error: `Clash YAML 解析失败：${e.message}` };
         }
@@ -239,8 +264,7 @@ function b64urlRaw(str) {
 
 export function serializeNodes(nodes, format) {
     if (format === 'clash') {
-        const proxies = nodes.map((n) => n.obj || { name: n.name, type: n.type, server: n.server, port: n.port });
-        return stringifyYaml({ proxies });
+        return stringifyYaml({ proxies: serializeClashResult(nodes).proxies });
     }
     // 有些机场/工具把 userinfo 整体 encodeURIComponent,连 uuid:password 的分隔冒号
     // 也写成了 %3A。mihomo 的 Go URL 解析器不把 %3A 当分隔符(只有裸冒号才分割),
@@ -270,6 +294,41 @@ function normalizeUriUserInfo(line) {
     const userinfo = m[2];
     if (!/%3A/i.test(userinfo) || userinfo.includes(':')) return line;
     return `${m[1]}${userinfo.replace(/%3A/gi, ':')}@${line.slice(m[0].length)}`;
+}
+
+/**
+ * Clash 输出主逻辑:Clash 源节点用原样 obj;URI 源节点经 uriToClashObj
+ * 转换(字段映射经真实 mihomo 逐节点验证,见 uri2clash.js 头注)。
+ * 转换失败的节点**丢弃并计数**(宁可少一个,也不给 mihomo 塞半截对象拒载全局)。
+ * 另做两件归一化:mieru transport 大写(mihomo 硬校验)、名称去重
+ * (mihomo 遇 duplicate proxy name 会拒载整个配置)。
+ */
+export function serializeClashResult(nodes) {
+    const proxies = [];
+    let converted = 0;
+    let dropped = 0;
+    for (const n of nodes) {
+        if (n.obj) {
+            proxies.push(normalizeMieruTransport(n.obj));
+            continue;
+        }
+        const o = n.raw ? uriToClashObj(n.raw, n.name) : null;
+        if (o) {
+            proxies.push(normalizeMieruTransport(o));
+            converted += 1;
+        } else {
+            dropped += 1;
+        }
+    }
+    // 名称去重:重复时追加 -2/-3(与参考实现一致,避免 mihomo duplicate proxy name)
+    const seen = new Map();
+    for (const p of proxies) {
+        const base = String(p.name || '');
+        const c = seen.get(base) || 0;
+        seen.set(base, c + 1);
+        if (c > 0) p.name = `${base}-${c + 1}`;
+    }
+    return { proxies, converted, dropped };
 }
 
 export function summarize(nodes) {

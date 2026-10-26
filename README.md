@@ -106,6 +106,14 @@ Fork 本仓库后通过 Cloudflare Workers Builds 部署时，如果构建报 `v
 若仍遇到类似错误，请在 Cloudflare 构建配置中设置环境变量 `NODE_ENV=development`，
 或使用 `npm install --include=dev` 安装完整依赖后再构建。
 
+另一种常见情况是构建日志里出现 `bun install ... No packages!`：Cloudflare 自动
+选了 bun 且在**仓库根目录**执行安装，而根 `package.json` 本身没有依赖（依赖都在
+`apps/web`、`apps/server` 子包里），于是什么都没装。解决办法（任选其一）：
+
+- 在 Workers Builds 的构建设置里，把 **Install command** 改为
+  `cd apps/web && npm install`（Deploy command 维持 `npx wrangler deploy`）；
+- 或把 **Build command** 改为 `cd apps/web && npm install && npm run build`。
+
 ### 本地开发
 
 ```bash

@@ -3,18 +3,14 @@
     "version": "1.0.1",
     "private": true,
     "type": "module",
-    "description": "SubPilot —— 一体化订阅管理面板：订阅管理 / 节点拼接 / 格式转换 / 文件与文档管理 / AI 助手，自建 Node / Docker 部署",
+    "description": "SubPilot —— 一体化订阅管理面板：订阅管理 / 节点拼接 / 格式转换 / 文件与文档管理 / AI 助手，部署到 Cloudflare Worker",
     "license": "AGPL-3.0-only",
-    "engines": {
-        "node": ">=22.5"
-    },
     "scripts": {
+        "prepare": "npm run install:all",
         "install:all": "cd apps/server && npm install && cd ../web && npm install",
+        "dev:server": "cd apps/server && npm run dev",
         "dev:web": "cd apps/web && npm run dev",
         "build": "cd apps/web && npm run build",
-        "start": "node --disable-warning=ExperimentalWarning index.js",
-        "docker:build": "docker build -t subpilot .",
-        "docker:up": "docker compose up -d --build",
-        "docker:down": "docker compose down"
+        "deploy": "npm run build && cd apps/server && npm run deploy"
     }
 }

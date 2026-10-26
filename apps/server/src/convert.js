@@ -399,6 +399,10 @@ export async function handleConvertLink(request, env, ctx, { query }) {
 
 export function convertedBackendLink({ env, snap, item, base, code }) {
     const name = String(item?.name || '').trim();
+    // 活链:保存时前端交上来的后端地址(产出面板那条)。卡片复制 / TG 推送
+    // 原样用它,与产出面板逐字一致;内容跟随订阅更新。
+    const live = String(item?.backendUrl || '').trim();
+    if (/^https?:\/\//i.test(live)) return live;
     const origin = String(base || '').replace(/\/+$/, '');
     if (!name || !origin) return '';
     const c =
@@ -406,7 +410,14 @@ export function convertedBackendLink({ env, snap, item, base, code }) {
         (snap?.shares || []).find((s) => s.type === 'converted' && s.name === name)?.code ||
         '';
     if (!c) return '';
-    return `${origin}/download/converted/${encodeURIComponent(name)}?code=${c}`;
+    // 老成品(活链字段上线前保存的)退回快照链:交给转换后端,内容取自
+    // 本站 /share/converted 快照 —— 固定 code,链接不随后续重存变化。
+    const backend = resolveBackend(env, snap?.settings);
+    const inner = `${origin}/share/converted/${encodeURIComponent(name)}?code=${encodeURIComponent(c)}`;
+    const qs = new URLSearchParams({ target: String(item?.target || 'clash'), url: inner });
+    const template = String(item?.template || '').trim();
+    if (template) qs.set('config', template);
+    return `${backend}/sub?${qs.toString()}`;
 }
 
 

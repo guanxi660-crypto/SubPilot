@@ -193,10 +193,20 @@ export async function safeFetch(rawUrl, init = {}, opts = {}) {
             next = { ...next, method: 'GET', body: undefined };
         }
 
+        // 审计 S8 修复:跨 origin 重定向不得携带凭证头(WebDAV Basic Auth 等
+        // 会随 30x 泄漏到第三方主机)。同 origin 才保留 Authorization/Cookie。
+        const prevOrigin = new URL(current).origin;
         try {
             current = new URL(loc, current).toString();
         } catch {
             throw new SsrfBlockedError(`${label}的重定向目标不合法`);
+        }
+        const nextOrigin = new URL(current).origin;
+        if (prevOrigin !== nextOrigin) {
+            const h = new Headers(next.headers || {});
+            h.delete('Authorization');
+            h.delete('Cookie');
+            next = { ...next, headers: h };
         }
     }
 

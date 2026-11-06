@@ -40,10 +40,12 @@ function alpnList(v) {
     return arr.length ? arr : undefined;
 }
 
-// tls/reality 公共字段(security=tls|reality 时)
-function applyTls(out, p) {
+// tls/reality 公共字段(security=tls|reality 时)。
+// sniKey:mihomo 各协议的 SNI 字段名不同 —— vless/vmess 用 servername,
+// trojan 用 sni(源码 TrojanOption.SNI `proxy:"sni"`),默认 servername。
+function applyTls(out, p, sniKey = 'servername') {
     out.tls = true;
-    if (p.sni) out.servername = p.sni;
+    if (p.sni) out[sniKey] = p.sni;
     if (p.fp) out['client-fingerprint'] = p.fp;
     if (truthy(p.insecure) || truthy(p.allowInsecure) || truthy(p.allow_insecure)) {
         out['skip-cert-verify'] = true;
@@ -65,18 +67,18 @@ function applyTransport(out, p) {
     const net = (p.type || 'tcp').toLowerCase();
     if (net === 'ws') {
         out.network = 'ws';
-        const ws = { path: safeDecode(p.path || '/') };
+        const ws = { path: p.path || '/' };
         if (p.host) ws.headers = { Host: p.host };
         out['ws-opts'] = ws;
     } else if (net === 'xhttp') {
         out.network = 'xhttp';
-        const x = { path: safeDecode(p.path || '/') };
+        const x = { path: p.path || '/' };
         if (p.host) x.host = p.host;
         if (p.mode) x.mode = p.mode; // auto / stream-one / stream-up / packet-up
         out['xhttp-opts'] = x;
     } else if (net === 'grpc') {
         out.network = 'grpc';
-        out['grpc-opts'] = { 'grpc-service-name': safeDecode(p.serviceName || p.path || '') };
+        out['grpc-opts'] = { 'grpc-service-name': p.serviceName || p.path || '' };
     }
 }
 
@@ -96,7 +98,7 @@ function buildVless(u, name) {
         type: 'vless',
         server: cleanHost(u.hostname),
         port: Number(u.port),
-        uuid: safeDecode(decodeUser(u, false)),
+        uuid: decodeUser(u, false),
         udp: true,
     };
     if (p.flow) out.flow = p.flow;
@@ -107,11 +109,11 @@ function buildVless(u, name) {
     return out;
 }
 
-// 取 userinfo 并把 %3A 编码的分隔冒号当真冒号处理(与 serializeNodes 的
-// normalizeUriUserInfo 同源问题:mihomo 的 Go 解析器不认 %3A,这里手动拆)
+// 取 userinfo 并做一次 percent-decode(WHATWG URL 的 username getter 保留编码,
+// 必须在这里解一次)。审计 S6 修复:调用处不得再 safeDecode —— 双重解码会把
+// 密码里的字面 %25 错误解成 %(tuic 的 %3A 拆分由 buildTuic 处理)
 function decodeUser(u, singleValue) {
     const raw = safeDecode(u.username || '');
-    if (singleValue) return raw;
     return raw;
 }
 
@@ -165,7 +167,7 @@ function buildHysteria2(u, name) {
         type: 'hysteria2',
         server: cleanHost(u.hostname),
         port: Number(u.port),
-        password: safeDecode(decodeUser(u, true)),
+        password: decodeUser(u, true),
     };
     if (p.sni) out.sni = p.sni;
     if (truthy(p.insecure) || truthy(p.allow_insecure)) out['skip-cert-verify'] = true;
@@ -186,7 +188,7 @@ function buildHysteria(u, name) {
         type: 'hysteria',
         server: cleanHost(u.hostname),
         port: Number(u.port),
-        'auth-str': p.auth || safeDecode(decodeUser(u, true)) || '',
+        'auth-str': p.auth || decodeUser(u, true) || '',
     };
     if (p.up) out.up = p.up;
     if (p.down) out.down = p.down;
@@ -207,7 +209,7 @@ function buildAnytls(u, name) {
         type: 'anytls',
         server: cleanHost(u.hostname),
         port: Number(u.port),
-        password: safeDecode(decodeUser(u, true)),
+        password: decodeUser(u, true),
         udp: true,
     };
     if (p.sni) out.sni = p.sni;
@@ -254,14 +256,14 @@ function buildTrojan(u, name) {
         type: 'trojan',
         server: cleanHost(u.hostname),
         port: Number(u.port),
-        password: safeDecode(decodeUser(u, true)),
+        password: decodeUser(u, true),
         udp: true,
     };
-    if (p.sni) out.sni = p.sni;
-    if (p.fp) out['client-fingerprint'] = p.fp;
-    if (truthy(p.allowInsecure) || truthy(p.allow_insecure) || truthy(p.insecure)) {
-        out['skip-cert-verify'] = true;
-    }
+    // 审计 S5 修复:改用 applyTls 统一处理 —— 原实现只读 sni/fp/allowInsecure,
+    // security=reality 的 pbk/sid 全丢,Trojan Reality 被降级成普通 TLS。
+    // mihomo 的 trojan SNI 字段名是 sni(非 servername)
+    const sec = (p.security || 'tls').toLowerCase();
+    if (sec === 'tls' || sec === 'reality') applyTls(out, p, 'sni');
     const alpn = alpnList(p.alpn);
     if (alpn) out.alpn = alpn;
     applyTransport(out, p);
@@ -301,7 +303,7 @@ function buildSs(u, name) {
     };
     // plugin=obfs-local;obfs=http;obfs-host=xxx 或 v2ray-plugin;mode=websocket;host=xxx
     if (u.searchParams.get('plugin')) {
-        const parts = safeDecode(u.searchParams.get('plugin')).split(';');
+        const parts = u.searchParams.get('plugin').split(';');
         const plugin = parts[0] || '';
         const opts = {};
         for (const kv of parts.slice(1)) {

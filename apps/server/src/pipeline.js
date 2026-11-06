@@ -133,6 +133,14 @@ export async function runPipeline(env, snap, { sources = [], process = [] } = {}
     
     nodes = dedupeSafe(nodes);
 
+    // 审计 S2 修复:format 取首个来源会导致混源时另一格式的节点被
+    // serializeNodes(nodes, format) 静默丢弃(缺 raw 的 YAML 节点在 uri 通道
+    // 被 filter 掉)。与 rawChannel 同规则:纯 URI → base64 透传;含 YAML 源 →
+    // 统一 Clash YAML(URI 节点转 mihomo 对象)。
+    const uriCount = nodes.filter((n) => n.raw).length;
+    const isPureUri = uriCount === nodes.length;
+    format = isPureUri ? 'uri' : 'clash';
+
     return {
         nodes,
         format,

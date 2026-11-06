@@ -77,13 +77,16 @@ export function defaultSnapshot() {
 }
 
 export async function loadSnapshot(env) {
+    let raw;
     try {
-        const raw = await driverOf(env).readSnapshot();
-        if (!isPlainObject(raw)) return defaultSnapshot();
-        return normalizeSnapshot(raw);
-    } catch {
-        return defaultSnapshot();
+        raw = await driverOf(env).readSnapshot();
+    } catch (e) {
+        // 审计 S3 修复:读异常时绝不能回落空快照——mutate 会以 rev=0 的空快照
+        // 覆写全部数据。fail-closed:让请求失败,等下一次读成功。
+        throw new Error(`快照读取失败：${e?.message || e}`);
     }
+    if (!isPlainObject(raw)) return defaultSnapshot();
+    return normalizeSnapshot(raw);
 }
 
 export class ConflictError extends Error {
@@ -96,6 +99,21 @@ export class ConflictError extends Error {
 }
 
 export async function saveSnapshot(env, snap, { expectedRev } = {}) {
+    // 审计 S3 修复:KV 无原生 CAS,用「写前读校验」近似——baseRev 与当前存储里的
+    // rev 不一致说明期间有并发写入,拒绝本次写(mutate 层捕获 ConflictError 重试)。
+    // 之前 writeSnapshot 直接 put、完全忽略 expectedRev,CAS 形同虚设。
+    // (注意:isPlainObject 返回布尔,不能写 isPlainObject(cur)?.rev —— 那是对
+    // 布尔取属性恒 undefined,必须先判后取)
+    if (expectedRev !== undefined) {
+        let cur = null;
+        try {
+            cur = await driverOf(env).readSnapshot();
+        } catch {
+            cur = null; // 读失败时无法比对,放行写入(避免死锁);loadSnapshot 已 fail-closed
+        }
+        const curRev = isPlainObject(cur) ? Number(cur.rev) || 0 : 0;
+        if (curRev !== expectedRev) throw new ConflictError();
+    }
     snap.updatedAt = nowIso();
     snap.rev = (Number(snap.rev) || 0) + 1;
     await driverOf(env).writeSnapshot(snap, { expectedRev });

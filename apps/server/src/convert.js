@@ -182,11 +182,9 @@ async function prepareConversion(request, env, snap, params) {
     const sources = [];
     let process = [];
 
-    if (params.sub) {
-        sub = snap.subs.find((s) => s.name === params.sub);
-        if (!sub) throw new ApiError(`订阅不存在：${params.sub}`, 404);
-        sources.push({ ref: sub.name, process: sub.process || [] });
-    } else if (params.collection) {
+    if (params.collection) {
+        // 审计 S1 修复:collection 与 sub 互斥且 collection 优先,防止 col 分享码
+        // 携带 sub= 参数越权读取任意私密订阅
         collection = snap.collections.find((c) => c.name === params.collection);
         if (!collection) throw new ApiError(`组合不存在：${params.collection}`, 404);
         for (const n of collection.subscriptions || []) {
@@ -202,6 +200,13 @@ async function prepareConversion(request, env, snap, params) {
                 });
         }
         process = collection.process || [];
+    } else if (params.sub) {
+        // 审计 S1 修复:collection 与 sub 互斥且 collection 优先,col 分享码携带
+        // sub= 参数无法再越权读取其他订阅。同时恢复早前重构中被误删的 sub 分支
+        // (缺失导致 main 上 sub 分享码 /share/sub/<name>?code= 一律 400)
+        sub = snap.subs.find((s) => s.name === params.sub);
+        if (!sub) throw new ApiError(`订阅不存在：${params.sub}`, 404);
+        sources.push({ ref: sub.name, process: sub.process || [] });
     } else if (params.url) {
         sources.push(...resolveSourceRefs(snap, params.url));
     }
@@ -589,6 +594,8 @@ export async function handleDownload(request, env, ctx, { path, query, method, t
         
         pullName = `多来源 · ${refs.length} 项`;
     } else if (isCollection) {
+        // 审计 S1 双保险:col 分发丢弃调用方传入的 sub 参数
+        q.delete('sub');
         q.set('collection', name);
     } else {
         q.set('sub', name);
@@ -703,7 +710,11 @@ export async function handleShare(request, env, ctx, { path, query, method }) {
     const q = new URLSearchParams(query);
     q.delete('code');
     if (kind === 'sub') q.set('sub', name);
-    else q.set('collection', name);
+    else {
+        // 审计 S1 双保险:col 分享码丢弃调用方传入的 sub 参数
+        q.delete('sub');
+        q.set('collection', name);
+    }
 
     
     

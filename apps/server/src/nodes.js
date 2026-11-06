@@ -5,7 +5,7 @@ import { uriToClashObj, normalizeMieruTransport } from './uri2clash.js';
 const KNOWN_SCHEMES = [
     'ss', 'ssr', 'ssd', 'vmess', 'vless', 'trojan', 'trojan-go',
     'hysteria', 'hysteria2', 'hy2', 'tuic', 'anytls', 'snell',
-    'socks', 'socks5', 'http', 'https', 'wireguard', 'ssh', 'mieru',
+    'socks', 'socks5', 'http', 'https', 'wireguard', 'ssh', 'mieru', 'mierus',
 ];
 
 export function detectFormat(text) {
@@ -87,6 +87,59 @@ export function parseUri(line, index = 0) {
         server = obj.add || '';
         port = parseInt(obj.port, 10) || 0;
         extra = obj;
+    } else if (scheme === 'mierus') {
+        // mieru 官方客户端 / mieru-lite 的分享链接:scheme 为 mierus://,端口与
+        // 协议在 query 里(port=41443&protocol=TCP&port=41443&protocol=UDP 表示
+        // 同端口双协议绑定)。mihomo 的 mieru 只支持单 transport —— 拆成
+        // TCP / UDP 两个节点,哪个通用哪个。userinfo = username:password。
+        const qs = new URLSearchParams(query);
+        const { host } = hostPort(rest);
+        const userinfo = (rest.split('@')[0] || '');
+        const cut = userinfo.indexOf(':');
+        const username = safeDecode(cut >= 0 ? userinfo.slice(0, cut) : userinfo);
+        const pwd = safeDecode(cut >= 0 ? userinfo.slice(cut + 1) : '');
+        const pairs = [];
+        let curPort = null;
+        for (const [k, v] of qs) {
+            if (k === 'port') curPort = parseInt(v, 10) || 0;
+            else if (k === 'protocol' && curPort) {
+                pairs.push({ port: curPort, proto: String(v).toUpperCase() });
+                curPort = null;
+            }
+        }
+        if (!pairs.length) {
+            const p0 = parseInt(qs.get('port'), 10) || 0;
+            if (p0) pairs.push({ port: p0, proto: 'TCP' });
+        }
+        if (!host || !pairs.length) return null;
+        const mux = qs.get('multiplexing') || '';
+        const hsm = qs.get('handshake-mode') || '';
+        const baseName = fragment || `mieru-${host}`;
+        return pairs.map((pr, i) => {
+            const name = baseName + (pairs.length > 1 ? `-${pr.proto}` : '');
+            const obj = {
+                name,
+                type: 'mieru',
+                server: host,
+                port: pr.port,
+                username,
+                password: pwd,
+                transport: pr.proto,
+            };
+            if (mux) obj.multiplexing = mux;
+            if (hsm) obj['handshake-mode'] = hsm;
+            return {
+                id: `u${index}-${hash8(raw)}-${i}`,
+                format: 'uri',
+                type: 'mieru',
+                name,
+                server: host,
+                port: pr.port,
+                raw,
+                extra: {},
+                obj,
+            };
+        });
     } else if (scheme === 'ssr') {
         
         const dec = b64decode(rest);
@@ -190,6 +243,7 @@ export function parseNodes(text) {
         const isUriLine = (l) => /^[a-z][a-z0-9+.-]*:\/\//i.test(l.trim());
         if (lines.some(isUriLine)) {
             const nodes = [];
+            const errors = [];
             let seg = [];
             let segIsUri = isUriLine(lines.find((l) => l.trim()) || '');
             const flush = () => {
@@ -198,9 +252,18 @@ export function parseNodes(text) {
                     nodes.push(...parseNodes(seg.join('\n')).nodes);
                 } else if (seg.some((l) => l.trim())) {
                     try {
-                        nodes.push(...clashProxiesToNodes(parseYaml(seg.join('\n'))));
-                    } catch {
-                        // YAML 段坏掉:跳过该段,URI 节点照常输出
+                        let yamlText = seg.join('\n');
+                        // 审计 SX1 修复:URI 插在 YAML 列表中间时,后续段没有
+                        // proxies: 头,parseYaml 解析不出列表 —— 自动补头
+                        if (!/^[ \t]*proxies[ \t]*:/m.test(yamlText)) {
+                            yamlText = 'proxies:\n' + yamlText;
+                        }
+                        // 审计 SX2 修复:`---` 文档分隔符会让单段 parseYaml 抛错
+                        yamlText = yamlText.split(/\r?\n/).filter((l) => !/^---\s*$/.test(l)).join('\n');
+                        nodes.push(...clashProxiesToNodes(parseYaml(yamlText)));
+                    } catch (e) {
+                        // 不再静默吞掉:记录原因,调用方(含前端)可见
+                        errors.push(`YAML 段解析失败：${e?.message || e}`);
                     }
                 }
                 seg = [];
@@ -215,8 +278,11 @@ export function parseNodes(text) {
                 seg.push(l);
             }
             flush();
+            if (!nodes.length && errors.length) {
+                return { format: 'clash', nodes, error: errors.join('; ') };
+            }
             if (!nodes.length) error = '混贴内容未能解析出任何节点';
-            return { format: 'clash', nodes, ...(error ? { error } : {}) };
+            return { format: 'clash', nodes, ...(error ? { error } : {}), ...(errors.length ? { warnings: errors } : {}) };
         }
         try {
             const doc = parseYaml(text);
@@ -234,8 +300,8 @@ export function parseNodes(text) {
         if (!line || !line.includes('://')) continue;
         const scheme = line.slice(0, line.indexOf('://')).toLowerCase();
         if (!KNOWN_SCHEMES.includes(scheme)) continue;
-        const n = parseUri(line, nodes.length);
-        if (n) nodes.push(n);
+        // mierus 分享链接可能拆成多个节点(同端口 TCP/UDP 双绑定)
+        for (const n of [].concat(parseUri(line, nodes.length) || [])) nodes.push(n);
     }
     return { format: 'uri', nodes };
 }
@@ -336,13 +402,19 @@ export function serializeClashResult(nodes) {
             dropped += 1;
         }
     }
-    // 名称去重:重复时追加 -2/-3(与参考实现一致,避免 mihomo duplicate proxy name)
+    // 名称去重:重复时追加 -2/-3(与参考实现一致,避免 mihomo duplicate proxy name)。
+    // 审计 S4 修复:改名结果也要写回 seen —— 否则原始名 A,A,A-2 会生成重复的 A-2。
     const seen = new Map();
     for (const p of proxies) {
         const base = String(p.name || '');
         const c = seen.get(base) || 0;
         seen.set(base, c + 1);
-        if (c > 0) p.name = `${base}-${c + 1}`;
+        if (c > 0) {
+            let n = 2;
+            while (seen.has(`${base}-${n}`)) n += 1;
+            p.name = `${base}-${n}`;
+            seen.set(p.name, (seen.get(p.name) || 0) + 1);
+        }
     }
     return { proxies, converted, dropped };
 }

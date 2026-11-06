@@ -112,7 +112,7 @@ export async function runPipeline(env, snap, { sources = [], process = [] } = {}
         let nodes = parsed.nodes;
         const own = Array.isArray(item.process) ? item.process : [];
         if (own.length) {
-            const r = applyOperators(nodes, own);
+            const r = await applyOperators(nodes, own);
             nodes = r.nodes;
             for (const l of r.log) log.push(`[${src.name}] ${l}`);
         }
@@ -125,13 +125,21 @@ export async function runPipeline(env, snap, { sources = [], process = [] } = {}
     
     let nodes = collected;
     if (Array.isArray(process) && process.length) {
-        const r = applyOperators(nodes, process);
+        const r = await applyOperators(nodes, process);
         nodes = r.nodes;
         for (const l of r.log) log.push(`[组合层] ${l}`);
     }
 
     
     nodes = dedupeSafe(nodes);
+
+    // 审计 S2 修复:format 取首个来源会导致混源时另一格式的节点被
+    // serializeNodes(nodes, format) 静默丢弃(缺 raw 的 YAML 节点在 uri 通道
+    // 被 filter 掉)。与 rawChannel 同规则:纯 URI → base64 透传;含 YAML 源 →
+    // 统一 Clash YAML(URI 节点转 mihomo 对象)。
+    const uriCount = nodes.filter((n) => n.raw).length;
+    const isPureUri = uriCount === nodes.length;
+    format = isPureUri ? 'uri' : 'clash';
 
     return {
         nodes,
@@ -154,10 +162,10 @@ function dedupeSafe(nodes) {
 }
 
 
-export function previewText(text, process = []) {
+export async function previewText(text, process = []) {
     const parsed = parseNodes(text);
     if (parsed.error) return { format: parsed.format, nodes: [], log: [parsed.error], summary: [] };
-    const r = applyOperators(parsed.nodes, process);
+    const r = await applyOperators(parsed.nodes, process);
     return {
         format: parsed.format,
         nodes: r.nodes,

@@ -64,7 +64,9 @@ export function parseChatIds(raw) {
     const text = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.join(',') : '';
     const parts = text
         .split(/[,，\s]+/)
-        .map((s) => s.trim().replace(/^@/, ''))
+        // 审计 S9 修复:保留 @ 前缀 —— Telegram 的 @channelusername 形式的
+        // 公开频道推送依赖它,剥掉会导致通知失效;纯数字 chat_id 不受影响
+        .map((s) => s.trim())
         .filter(Boolean);
     if (!parts.length) throw new Error('请填写至少一个推送 ID（chat_id）');
     if (parts.length > MAX_CHATS) {
@@ -76,7 +78,9 @@ export function parseChatIds(raw) {
         if (p.length > MAX_CHAT_ID_LEN) throw new Error(`推送 ID 过长：${p.slice(0, 20)}…`);
         
         
-        if (!/^-?\d+$/.test(p) && !/^[A-Za-z][A-Za-z0-9_]+$/.test(p)) {
+        // 审计 S9 修复:允许 @channelusername 形式(此前 @ 被剥掉导致校验
+        // 按裸频道名匹配失败、且发送时 Telegram 拒收裸名)
+        if (!/^-?\d+$/.test(p) && !/^@[A-Za-z][A-Za-z0-9_]{4,}$/.test(p) && !/^[A-Za-z][A-Za-z0-9_]+$/.test(p)) {
             throw new Error(`推送 ID 格式不合法：${p}（应为数字，或 @频道名）`);
         }
         if (seen.has(p)) continue;

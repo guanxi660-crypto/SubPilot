@@ -367,8 +367,23 @@ export function uriToClashObj(raw, name) {
     try {
         if (scheme === 'vmess') return buildVmess(line, name);
         if (!/^https?:/.test(line) && !KNOWN.includes(scheme)) return null;
-        const u = new URL(line);
-        if (!u.hostname || !u.port) return null;
+        let u = new URL(line);
+        if (!u.hostname) return null;
+        if (!u.port) {
+            // 审计 S7(部分成立):http/https 是 WHATWG special scheme,明写默认
+            // 端口(:80/:443)会被解析清空成 '',且对 special scheme 的 port setter
+            // 赋回默认值也会再次被清 —— 换成自定义前缀重建 URL 以保留端口语义,
+            // 其余属性(hostname/userinfo/searchParams)行为不变。vless/trojan 等
+            // 自定义 scheme 不清端口,不受影响。
+            const fallback = { http: 80, https: 443, socks: 1080, socks5: 1080 }[scheme];
+            if (!fallback) return null;
+            try {
+                u = new URL(`${scheme}-subpilot://${line.slice(idx + 3)}`);
+                u.port = String(fallback);
+            } catch {
+                return null;
+            }
+        }
         switch (scheme) {
             case 'vless': return buildVless(u, name);
             case 'hysteria2': case 'hy2': return buildHysteria2(u, name);

@@ -173,6 +173,40 @@ docker compose down
 
 ### 混输兼容说明（订阅混源时的输出格式与客户端兼容性）
 
+#### 支持哪些协议
+
+**URI 分享链接可直接转换成 mihomo 节点**（纯 YAML / 混源输出时自动转换，字段映射经真实 mihomo 内核逐节点验证）：
+
+| 协议 | 覆盖范围 |
+| --- | --- |
+| `vless://` | TLS / Reality（pbk、sid）/ ws / grpc / xhttp / ECH |
+| `vmess://` | 标准 base64 JSON 格式 |
+| `trojan://` | TLS / Reality / ws / grpc |
+| `ss://` | 含 SS2022、`plugin=obfs-local` / `v2ray-plugin` |
+| `hysteria://` / `hysteria2://` / `hy2://` | 含带宽、混淆、`pinSHA256` |
+| `tuic://` | v5 |
+| `anytls://` | 含 uTLS 指纹 |
+| `snell://` | Potatso 社区格式：`snell://PSK@host:port?version=1-6`；`mode` / `userkey` 仅 v6 下发，`obfs` 仅 v3–5，v6 自动忽略 obfs |
+| `socks://` / `socks5://` / `http://` / `https://` | 明写默认端口（`:80` / `:443`）也能正确识别 |
+| `mierus://` | 一个链接含 TCP+UDP 双绑定时自动拆成两个节点 |
+
+#### 哪些协议需要 YAML 输入
+
+以下协议**没有可转换的 URI 格式**（或 SubPilot 暂不转换），必须把节点写成 Clash YAML（顶层要有 `proxies:` 键）才能进入混源输出：
+
+| 协议 | 输入方式 |
+| --- | --- |
+| `mieru` | Clash YAML 节点，或 `mierus://` 分享链接（mieru-lite 的输出格式） |
+| `wireguard` | Clash YAML |
+| `ssh` | Clash YAML |
+| `ssr` / `ssd` | Clash YAML |
+| `trojan-go` | Clash YAML（或改用标准 `trojan://`） |
+| 其他 mihomo 支持的协议 | Clash YAML 原样透传——mihomo 内核支持什么就能用 |
+
+`wireguard://`、`ssr://`、`ssh://` 这类 URI 在混源转 Clash 时**无法安全转换，会被丢弃**并计入 `X-SubPilot-Dropped` 响应头；纯 URI 订阅（不混源）里它们仍按 base64 原样透传，客户端能否使用取决于客户端内核。
+
+#### 输出格式规则
+
 一个订阅/组合里同时含 **URI 分享链接**（vless://、vmess:// 等）和 **Clash YAML 片段**（如 mieru 这类没有分享链接格式的协议）时，输出格式按以下规则自动选择：
 
 | 来源构成 | 输出格式 | 说明 |
@@ -190,7 +224,7 @@ docker compose down
 | OpenClash / mihomo / Clash Verge Rev | ✅ 全部节点可用 |
 | v2rayN / v2rayNG（新版，支持 YAML 订阅） | ⚠️ 仅 vless / vmess / trojan / ss 可用（Xray 内核）；hysteria2 / tuic / anytls 需切换 sing-box 内核 |
 | 仅支持 base64 订阅的旧客户端 | ❌ 无法识别混源输出 |
-| **mieru** | ❌ mihomo 专属协议，任何 v2ray / sing-box 内核都不支持，只能在 mihomo 系客户端使用 |
+| **mieru** / **snell** | ❌ mihomo 专属协议（snell 另需 Surge 系），任何 v2ray / sing-box 内核都不支持，只能在对应内核的客户端使用 |
 
 **建议**：混源订阅请用 mihomo 系客户端（OpenClash 等）。若主用 v2rayN，请单独建一条纯 URI 订阅给它的内核使用——注意 tuic / hysteria2 / anytls / mieru 这类节点在 v2ray 系内核里本身就不存在，与混输无关。
 

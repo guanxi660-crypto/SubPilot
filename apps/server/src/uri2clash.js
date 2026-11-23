@@ -335,6 +335,43 @@ function tryB64(s) {
     }
 }
 
+// snell:// —— Snell 无官方 URI 规范,按 Potatso/Surge 社区通行格式解析:
+//   snell://PSK@host:port?version=6&mode=default&userkey=xxx&reuse=true
+//     &obfs=http&obfs-host=bing.com&udp=true&name=...
+// mihomo 约束:udp 仅 v3+;reuse 仅 v4+;mode/userkey 仅 v6;v6 无 obfs
+// (PSK 派生流量整形代替,带 obfs 会被 mihomo 拒绝);psk 在 userinfo 位、
+// percent-encoded,WHATWG username getter 保留编码 → 解一次。
+function buildSnell(u, name) {
+    const psk = safeDecode(u.username || '') || safeDecode(u.password || '');
+    if (!psk) return null;
+    const q = u.searchParams;
+    const v = Number(q.get('version'));
+    const version = Number.isInteger(v) && v >= 1 && v <= 6 ? v : 4; // 缺省 4(Potatso 约定)
+    const out = {
+        name,
+        type: 'snell',
+        server: cleanHost(u.hostname),
+        port: Number(u.port),
+        psk,
+        version,
+    };
+    if (version >= 3) out.udp = true; // v1/v2 不支持 UDP
+    if (version >= 4 && truthy(q.get('reuse'))) out.reuse = true;
+    if (version === 6) {
+        const key = q.get('userkey');
+        if (key) out.userkey = key; // v6 专属 ClientID
+        const mode = (q.get('mode') || '').toLowerCase();
+        if (mode === 'default' || mode === 'unshaped' || mode === 'unsafe-raw') out.mode = mode;
+    } else {
+        // obfs 仅 v3-5 且只认 http/tls;v6 不支持,忽略
+        const obfs = (q.get('obfs') || '').toLowerCase();
+        if (obfs === 'http' || obfs === 'tls') {
+            out['obfs-opts'] = { mode: obfs, host: q.get('obfs-host') || 'bing.com' };
+        }
+    }
+    return out;
+}
+
 // socks5/http(s)://user:pass@host:port
 function buildSocksHttp(u, name, type) {
     const out = {
@@ -393,6 +430,7 @@ export function uriToClashObj(raw, name) {
             case 'trojan': return buildTrojan(u, name);
             case 'ss': return buildSs(u, name);
             case 'socks': case 'socks5': return buildSocksHttp(u, name, 'socks5');
+            case 'snell': return buildSnell(u, name);
             case 'http': case 'https': return buildSocksHttp(u, name, 'http');
             default: return null;
         }
@@ -402,7 +440,7 @@ export function uriToClashObj(raw, name) {
 }
 
 // WHATWG URL 对 http/https 是 special scheme,单独放行;其余按白名单
-const KNOWN = ['vless', 'hysteria2', 'hy2', 'hysteria', 'anytls', 'tuic', 'trojan', 'ss', 'socks', 'socks5'];
+const KNOWN = ['vless', 'hysteria2', 'hy2', 'hysteria', 'anytls', 'tuic', 'trojan', 'ss', 'socks', 'socks5', 'snell'];
 
 /**
  * mihomo 对 mieru 的 transport 源码硬校验:必须大写 TCP/UDP,小写直接报错。

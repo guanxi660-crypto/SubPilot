@@ -228,6 +228,31 @@ docker compose down
 
 **建议**：混源订阅请用 mihomo 系客户端（OpenClash 等）。若主用 v2rayN，请单独建一条纯 URI 订阅给它的内核使用——注意 tuic / hysteria2 / anytls / mieru 这类节点在 v2ray 系内核里本身就不存在，与混输无关。
 
+#### 跳过证书验证（scv）什么时候开
+
+**它做什么**：让客户端不再校验 TLS 证书链与域名匹配（Clash / mihomo 里就是节点字段 `skip-cert-verify: true`）。
+
+**需要开的场景**（满足任意一条即可）：
+
+1. **自建节点用了自签证书**——自建 hysteria2 / tuic / trojan 时证书不是公信 CA 签发（常见 `openssl` 自签或脚本一键生成的证书）。
+2. **IP 直连、证书却签给域名**——报错形如 `x509: cannot validate certificate for 1.2.3.4 because it doesn't contain any IP SANs`。
+3. **CDN / 端口转发 / 前置代理导致证书域名与连接地址不一致**（中转后 SNI 与证书对不上）。
+4. **证书过期或链不完整**，但你确认服务端本身可信（临时救急，事后应修证书）。
+
+常见报错对照：`tls: failed to verify certificate: x509: certificate signed by unknown authority`、`certificate has expired`、`certificate is valid for a.com, not b.com` —— 出现这类字样先开 scv 验证是不是纯证书问题；开了能连就是证书问题，开了还连不上就与证书无关（查端口 / 密码 / 协议版本）。
+
+**不要开的场景**：
+
+- 证书由公信 CA（Let's Encrypt 等）签发且域名匹配时**不要开**。跳过验证等于放弃中间人攻击的最后一道防线，机场环境、公共 Wi-Fi 尤其危险。
+- 只为了「图省事」全局打开也不建议——按节点或按订阅开，别把整个客户端设为不校验证书。
+
+**怎么开（三种方式）**：
+
+| 方式 | 用法 |
+| --- | --- |
+| 转换页参数 | 转换设置勾「跳过证书验证」（`scv=true`）——走外部转换后端（默认 SCE）时对全部 TLS 节点生效；内置转换通道不认这个全局开关 |
+| 节点 URI 自带参数 | 链接里已有 `insecure=1` / `allow_insecure=1`（hy2 / tuic 常见）→ 该节点转换后自动带 `skip-cert-verify: true`，无需额外操作 |
+| 节点算子 | Quick Settings 填 `{"skip-cert-verify": true}`（仅 Clash YAML 形态的节点可用，URI 节点请用上面两种方式） |
 
 ### Fork 部署须知
 

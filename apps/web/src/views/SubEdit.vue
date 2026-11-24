@@ -176,19 +176,21 @@
                             </div>
                             <NodeContentEditor
                                 v-model="form.content"
+                                node-numbers
                                 class="mt-1.5 h-96"
                                 :class="contentEdH == null ? 'lg:flex-1 lg:min-h-[140px]' : 'lg:flex-none'"
                                 :style="contentEdH != null ? { height: `${contentEdH}px` } : undefined"
-                                placeholder="ss://... 或&#10;proxies:&#10;  - name: xxx"
+                                placeholder="ss://... 或&#10;  - name: xxx"
                             />
-                            <!-- 拉伸热区：整个底边可拖（hover 显示高亮线提示） -->
+                            <!-- 拉伸热区：整个底边可拖；中心常驻一个抓握图标，hover 只把线变白 -->
                             <div
                                 data-ed-grip
-                                class="group absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize"
+                                class="group absolute bottom-0 left-0 right-0 h-3 z-10 cursor-ns-resize"
                                 title="拖动调整高度"
                                 @mousedown.prevent="startEdResize"
                             >
-                                <span class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-transparent group-hover:bg-sky-400/70 transition-colors"></span>
+                                <span class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-transparent group-hover:bg-slate-200/70 transition-colors"></span>
+                                <span class="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-0 flex h-4 items-center rounded-t-md border border-b-0 border-line bg-panel2 px-1.5 text-[10px] leading-none text-slate-500 group-hover:text-slate-200 transition-colors">↕</span>
                             </div>
                         </div>
                     </div>

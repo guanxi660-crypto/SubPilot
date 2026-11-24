@@ -14,6 +14,9 @@ export function detectFormat(text) {
     
     
     if (/(^|\n)[ \t]*proxies[ \t]*:/m.test(t)) return 'clash';
+    // 无 `proxies:` 头的裸节点列表（`- name: ...` + `type: ...`）也是 Clash YAML：
+    // 直接粘贴单个节点时不该逼用户补一行头。
+    if (/(^|\n)[ \t]*-[ \t]+['"]?name['"]?[ \t]*:/m.test(t) && /(^|\n)[ \t]*type[ \t]*:/m.test(t)) return 'clash';
     if (t.startsWith('{') && /"proxies"\s*:/.test(t)) return 'clash';
     if (t.includes('://')) return 'uri';
     if (looksLikeBase64(t)) {
@@ -251,19 +254,21 @@ export function parseNodes(text) {
                 if (segIsUri) {
                     nodes.push(...parseNodes(seg.join('\n')).nodes);
                 } else if (seg.some((l) => l.trim())) {
-                    try {
-                        let yamlText = seg.join('\n');
-                        // 审计 SX1 修复:URI 插在 YAML 列表中间时,后续段没有
-                        // proxies: 头,parseYaml 解析不出列表 —— 自动补头
-                        if (!/^[ \t]*proxies[ \t]*:/m.test(yamlText)) {
-                            yamlText = 'proxies:\n' + yamlText;
+                    // 审计 SX2 修复:`---` 分隔的多份文档合并成单文档会产生重复
+                    // proxies: 键,parseYaml 抛 "Map keys must be unique" 整段丢失 ——
+                    // 逐文档解析,每份按需补 proxies: 头(SX1),一份失败只记 warning
+                    const docs = seg.join('\n').split(/^[ \t]*---[ \t]*$/m);
+                    for (const docText of docs) {
+                        if (!docText.trim()) continue;
+                        try {
+                            const t = /^[ \t]*proxies[ \t]*:/m.test(docText)
+                                ? docText
+                                : 'proxies:\n' + docText;
+                            nodes.push(...clashProxiesToNodes(parseYaml(t)));
+                        } catch (e) {
+                            // 不再静默吞掉:记录原因,调用方(含前端)可见
+                            errors.push(`YAML 段解析失败：${e?.message || e}`);
                         }
-                        // 审计 SX2 修复:`---` 文档分隔符会让单段 parseYaml 抛错
-                        yamlText = yamlText.split(/\r?\n/).filter((l) => !/^---\s*$/.test(l)).join('\n');
-                        nodes.push(...clashProxiesToNodes(parseYaml(yamlText)));
-                    } catch (e) {
-                        // 不再静默吞掉:记录原因,调用方(含前端)可见
-                        errors.push(`YAML 段解析失败：${e?.message || e}`);
                     }
                 }
                 seg = [];
@@ -285,7 +290,9 @@ export function parseNodes(text) {
             return { format: 'clash', nodes, ...(error ? { error } : {}), ...(errors.length ? { warnings: errors } : {}) };
         }
         try {
-            const doc = parseYaml(text);
+            // 允许裸节点列表（无 `proxies:` 头）：detectFormat 已确认是 YAML，
+            // 这里按需补头再解析，输出仍是标准 Clash YAML。
+            const doc = parseYaml(/^[ \t]*proxies[ \t]*:/m.test(text) ? text : 'proxies:\n' + text);
             return { format: 'clash', nodes: clashProxiesToNodes(doc) };
         } catch (e) {
             return { format: 'clash', nodes: [], error: `Clash YAML 解析失败：${e.message}` };

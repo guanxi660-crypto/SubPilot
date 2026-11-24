@@ -5,11 +5,10 @@
 <script setup>
 // 带行号的纯文本编辑器（节点内容 / URI 列表 / Clash YAML）。
 //
-// 为什么用 CodeMirror 而不是 <textarea>：
-//   行号是这里的主要诉求 —— 节点内容动辄几十上百行，报错说「第 12 行」时
-//   textarea 完全帮不上忙。手搓一个行号槽（左侧 div 跟滚动同步）在折行场景
-//   必然错位，CodeMirror 的 lineNumbers 按逻辑行编号、折行不额外计数，
-//   行号格子高度自动撑到折行后的总高度，不用自己算。
+// 行号默认按物理行；订阅内容编辑器传 node-numbers 后改为「一个节点一个行号」：
+// URI 一行一节点、YAML 只在 `- name:` 行显示节点序号，节点内部字段行留空 ——
+// 这样在一个节点里插字段不会让后面所有节点的号漂移。远程订阅地址是 URL 列表，
+// 不是节点，保持物理行号。
 //
 // 与参考实现（SubPilot-Archive 的 NodeContentEditor）的差别：
 //   那边把颜色写死在 EditorView.theme 里；本站有 dark / light / glass 三套主题，
@@ -19,17 +18,33 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { EditorView, lineNumbers, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { buildNodeNumberMap } from '../utils/nodeLineNumbers.js';
 
 const props = defineProps({
     modelValue: { type: String, default: '' },
     placeholder: { type: String, default: '' },
     /** 只读（用于「预览」之类的展示场景） */
     readonly: { type: Boolean, default: false },
+    /** true：行号 = 节点序号（一个节点一个号）；false：普通物理行号 */
+    nodeNumbers: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:modelValue']);
 
 const host = ref(null);
 let view = null;
+
+// 行号 = 节点序号（一个节点一个号），见 utils/nodeLineNumbers.js。
+// formatNumber 由 CodeMirror 按可见行调用；弱键缓存避免每次滚动都全量重扫。
+const numberMaps = new WeakMap();
+function formatNodeNumber(lineNo, state) {
+    if (!props.nodeNumbers) return String(lineNo);
+    let map = numberMaps.get(state);
+    if (!map) {
+        map = buildNodeNumberMap(state.doc);
+        numberMaps.set(state, map);
+    }
+    return map.get(lineNo) || '';
+}
 
 const theme = EditorView.theme(
     {
@@ -72,7 +87,7 @@ onMounted(() => {
         doc: props.modelValue,
         parent: host.value,
         extensions: [
-            lineNumbers(),
+            lineNumbers({ formatNumber: formatNodeNumber }),
             EditorView.lineWrapping,
             history(),
             keymap.of([...defaultKeymap, ...historyKeymap]),

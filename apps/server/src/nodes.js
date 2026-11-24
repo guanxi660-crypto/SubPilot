@@ -14,6 +14,9 @@ export function detectFormat(text) {
     
     
     if (/(^|\n)[ \t]*proxies[ \t]*:/m.test(t)) return 'clash';
+    // 无 `proxies:` 头的裸节点列表（`- name: ...` + `type: ...`）也是 Clash YAML：
+    // 直接粘贴单个节点时不该逼用户补一行头。
+    if (/(^|\n)[ \t]*-[ \t]+['"]?name['"]?[ \t]*:/m.test(t) && /(^|\n)[ \t]*type[ \t]*:/m.test(t)) return 'clash';
     if (t.startsWith('{') && /"proxies"\s*:/.test(t)) return 'clash';
     if (t.includes('://')) return 'uri';
     if (looksLikeBase64(t)) {
@@ -287,7 +290,9 @@ export function parseNodes(text) {
             return { format: 'clash', nodes, ...(error ? { error } : {}), ...(errors.length ? { warnings: errors } : {}) };
         }
         try {
-            const doc = parseYaml(text);
+            // 允许裸节点列表（无 `proxies:` 头）：detectFormat 已确认是 YAML，
+            // 这里按需补头再解析，输出仍是标准 Clash YAML。
+            const doc = parseYaml(/^[ \t]*proxies[ \t]*:/m.test(text) ? text : 'proxies:\n' + text);
             return { format: 'clash', nodes: clashProxiesToNodes(doc) };
         } catch (e) {
             return { format: 'clash', nodes: [], error: `Clash YAML 解析失败：${e.message}` };

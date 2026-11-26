@@ -15,7 +15,7 @@
 //   写死就没法跟随。这里颜色一律引用 styles.css 的 --cm-* 变量 ——
 //   变量在绘制时求值，所以切换主题不需要重建编辑器实例。
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
-import { EditorView, lineNumbers, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
+import { EditorView, gutter, GutterMarker, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { buildNodeNumberMap } from '../utils/nodeLineNumbers.js';
@@ -34,17 +34,45 @@ const host = ref(null);
 let view = null;
 
 // 行号 = 节点序号（一个节点一个号），见 utils/nodeLineNumbers.js。
-// formatNumber 由 CodeMirror 按可见行调用；弱键缓存避免每次滚动都全量重扫。
+// 用自己的 gutter 而不是 lineNumbers({formatNumber})：后者把 spacer 取成
+// 「最后物理行」的标注，节点模式下那行通常是字段行 → 标注为空 → 列宽只剩
+// CSS 的 2.25rem，节点数上百时 3 位数会被挤掉。这里 spacer 用节点总数。
 const numberMaps = new WeakMap();
-function formatNodeNumber(lineNo, state) {
-    if (!props.nodeNumbers) return String(lineNo);
+function getNodeMap(state) {
     let map = numberMaps.get(state);
     if (!map) {
         map = buildNodeNumberMap(state.doc);
         numberMaps.set(state, map);
     }
-    return map.get(lineNo) || '';
+    return map;
 }
+function maxNodeLabel(state) {
+    if (!props.nodeNumbers) return String(state.doc.lines);
+    const map = getNodeMap(state);
+    let max = 0;
+    for (const v of map.values()) max = Math.max(max, Number(v) || 0);
+    return max ? String(max) : '1';
+}
+class NumberMarker extends GutterMarker {
+    constructor(text) { super(); this.text = text; }
+    eq(other) { return this.text === other.text; }
+    toDOM() { const el = document.createElement('span'); el.textContent = this.text; return el; }
+}
+const lineNumberGutter = gutter({
+    class: 'cm-lineNumbers',
+    lineMarker(view, line) {
+        const state = view.state;
+        const no = state.doc.lineAt(line.from).number;
+        const text = props.nodeNumbers ? (getNodeMap(state).get(no) || '') : String(no);
+        return new NumberMarker(text);
+    },
+    lineMarkerChange: (update) => update.docChanged,
+    initialSpacer: (view) => new NumberMarker(maxNodeLabel(view.state)),
+    updateSpacer: (spacer, update) => {
+        const text = maxNodeLabel(update.state);
+        return spacer.text === text ? spacer : new NumberMarker(text);
+    },
+});
 
 const theme = EditorView.theme(
     {
@@ -87,7 +115,7 @@ onMounted(() => {
         doc: props.modelValue,
         parent: host.value,
         extensions: [
-            lineNumbers({ formatNumber: formatNodeNumber }),
+            lineNumberGutter,
             EditorView.lineWrapping,
             history(),
             keymap.of([...defaultKeymap, ...historyKeymap]),

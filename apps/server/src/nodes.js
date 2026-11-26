@@ -14,9 +14,17 @@ export function detectFormat(text) {
     
     
     if (/(^|\n)[ \t]*proxies[ \t]*:/m.test(t)) return 'clash';
-    // 无 `proxies:` 头的裸节点列表（`- name: ...` + `type: ...`）也是 Clash YAML：
-    // 直接粘贴单个节点时不该逼用户补一行头。
-    if (/(^|\n)[ \t]*-[ \t]+['"]?name['"]?[ \t]*:/m.test(t) && /(^|\n)[ \t]*type[ \t]*:/m.test(t)) return 'clash';
+    // 无 `proxies:` 头的裸节点列表也是 Clash YAML：直接粘贴单个节点时不该逼用户补一行头。
+    // 行首 `- name:` / `- type:` / `- {name: ...}`（flow）都算节点块开头；
+    // 再要求文档里出现 `name:` 键，避免把普通文本误判成 YAML。
+    // 合法性最终交给 parseYaml：真不是 YAML 就报错，而不是静默 0 节点。
+    const bareNodeStart = /(^|\n)[ \t]*-[ \t]*(?:\{|\[)?[ \t]*['"]?(?:name|type)['"]?[ \t]*:/m.test(t);
+    // `name:` 必须出现在节点块里：列表项（`- name:` / `- {name:`）或缩进行（`    name:`）。
+    // 单独一行的顶层 `name: foo` 不算，避免把普通文本误判成 YAML。
+    const hasNameKey = /(^|\n)[ \t]*-[ \t]*\{?[ \t]*['"]?name['"]?[ \t]*:/m.test(t)
+        || /(^|\n)[ \t]+\{?[ \t]*['"]?name['"]?[ \t]*:/m.test(t)
+        || /(^|\n)[ \t]*\{[ \t]*['"]?name['"]?[ \t]*:/m.test(t);
+    if (bareNodeStart && hasNameKey) return 'clash';
     if (t.startsWith('{') && /"proxies"\s*:/.test(t)) return 'clash';
     if (t.includes('://')) return 'uri';
     if (looksLikeBase64(t)) {
@@ -289,14 +297,26 @@ export function parseNodes(text) {
             if (!nodes.length) error = '混贴内容未能解析出任何节点';
             return { format: 'clash', nodes, ...(error ? { error } : {}), ...(errors.length ? { warnings: errors } : {}) };
         }
-        try {
-            // 允许裸节点列表（无 `proxies:` 头）：detectFormat 已确认是 YAML，
-            // 这里按需补头再解析，输出仍是标准 Clash YAML。
-            const doc = parseYaml(/^[ \t]*proxies[ \t]*:/m.test(text) ? text : 'proxies:\n' + text);
-            return { format: 'clash', nodes: clashProxiesToNodes(doc) };
-        } catch (e) {
-            return { format: 'clash', nodes: [], error: `Clash YAML 解析失败：${e.message}` };
+        // 允许裸节点列表（无 `proxies:` 头）：detectFormat 已确认是 YAML，
+        // 这里按需补头再解析，输出仍是标准 Clash YAML。
+        // 与混贴分支一致：`---` 分隔的多份文档逐份解析，避免拼出
+        // `proxies:\n---\n...` 这种多文档输入被 parseYaml 直接抛错。
+        const nodes = [];
+        const errors = [];
+        const docs = text.split(/^[ \t]*---[ \t]*$/m);
+        for (const docText of docs) {
+            if (!docText.trim()) continue;
+            try {
+                const t = /^[ \t]*proxies[ \t]*:/m.test(docText) ? docText : 'proxies:\n' + docText;
+                nodes.push(...clashProxiesToNodes(parseYaml(t)));
+            } catch (e) {
+                errors.push(`Clash YAML 解析失败：${e.message}`);
+            }
         }
+        if (!nodes.length && errors.length) {
+            return { format: 'clash', nodes, error: errors.join('; ') };
+        }
+        return { format: 'clash', nodes, ...(errors.length ? { warnings: errors } : {}) };
     }
 
     
